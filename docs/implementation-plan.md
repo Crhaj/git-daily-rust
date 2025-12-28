@@ -81,16 +81,15 @@ Build order: `git.rs` → `repo.rs` → `output.rs` → `main.rs`
 ## Phase 6: Single Repo Update (No Progress)
 *Goal: Core update logic working for one repo*
 
-- [ ] **6.1** `repo.rs`: implement `update<F>(path, on_step) -> UpdateResult` signature
-- [ ] **6.2** `repo.rs`: implement `do_update()` - detect branch
-- [ ] **6.3** `repo.rs`: add stash logic (if dirty)
-- [ ] **6.4** `repo.rs`: add checkout main/master with fallback
-- [ ] **6.5** `repo.rs`: add fetch --prune
-- [ ] **6.6** `repo.rs`: add restore original branch
-- [ ] **6.7** `repo.rs`: add stash pop (if stashed)
-- [ ] **6.8** `repo.rs`: implement `restore_state()` helper for error recovery
-- [ ] **6.9** `main.rs`: call `repo::update()` for single repo mode (with `|_| {}` callback)
-- [ ] **6.10** Verify: manually test on a real repo with a feature branch
+- [x] **6.1** `repo.rs`: implement `update<F>(path, on_step) -> UpdateResult` signature
+- [x] **6.2** `repo.rs`: implement `do_update()` - detect branch
+- [x] **6.3** `repo.rs`: add stash logic (if dirty)
+- [x] **6.4** `repo.rs`: add checkout main/master with fallback
+- [x] **6.5** `repo.rs`: add fetch --prune
+- [x] **6.6** `repo.rs`: add restore original branch
+- [x] **6.7** `repo.rs`: add stash pop (if stashed)
+- [ ] **6.8** `main.rs`: call `repo::update()` for single repo mode (with `|_| {}` callback)
+- [ ] **6.9** Verify: manually test on a real repo with a feature branch
 
 ---
 

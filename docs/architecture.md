@@ -198,7 +198,7 @@ repo::update(&path, |_| {});
 9. Completed
 ```
 
-On failure: attempt to restore original state, record failure with step info.
+On failure: exit immediately, record failure with step and error info. No automatic state restoration is attempted - this avoids compounding errors and lets the user resolve issues (like stash pop conflicts) manually with full context.
 
 ## CLI Interface
 
@@ -285,7 +285,7 @@ impl TestRepo {
 | `falls_back_to_main_when_no_master` | Main branch detection |
 | `reports_failure_when_no_remote` | Error handling |
 | `handles_already_on_main_branch` | Edge case |
-| `restores_branch_on_fetch_failure` | Error recovery |
+| `reports_step_info_on_failure` | Error context includes failing step |
 
 ### What NOT to Test
 
