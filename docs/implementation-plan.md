@@ -36,7 +36,7 @@ Build order: `git.rs` → `repo.rs` → `output.rs` → `main.rs`
 ## Phase 2: Basic Output and Detection
 *Goal: Print working directory, detect if current dir is a git repo*
 
-- [ ] **2.1** `output.rs`: implement `print_working_dir(path: &Path)`
+- [x] **2.1** `output.rs`: implement `print_working_dir(path: &Path)`
 - [ ] **2.2** `repo.rs`: implement `is_git_repo(path: &Path) -> bool`
 - [ ] **2.3** `main.rs`: get cwd, print it, check if git repo, print result
 - [ ] **2.4** Verify: run in a git repo vs non-git directory, see different output

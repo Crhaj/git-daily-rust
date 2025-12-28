@@ -1,6 +1,10 @@
+use std::path::Path;
+
 // Progress bars, colored output, summary formatting
-//
-// TODO: print_working_dir(path)
+
+pub fn print_working_dir(path: &Path) {
+    println!("Working in: {}", path.display())
+}
 // TODO: create_repo_progress()
 // TODO: create_workspace_progress(count)
 // TODO: update_progress(pb, step)
