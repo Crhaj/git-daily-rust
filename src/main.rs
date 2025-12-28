@@ -11,11 +11,7 @@ fn main() -> anyhow::Result<()> {
         println!("Not a git repo, checking subdirectories...\n");
 
         let sub_dirs = repo::find_git_repos(&cwd);
-
-        println!("Subdirectories count: {}", sub_dirs.len());
-        for sub_dir in &sub_dirs {
-            output::print_working_dir(sub_dir);
-        }
+        output::print_workspace_start(sub_dirs.len());
     }
 
     Ok(())
