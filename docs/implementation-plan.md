@@ -57,8 +57,8 @@ Build order: `git.rs` → `repo.rs` → `output.rs` → `main.rs`
 ## Phase 4: Git Wrappers
 *Goal: All git operations implemented and manually testable*
 
-- [ ] **4.1** `git.rs`: implement `run_git(repo, args)` helper (private)
-- [ ] **4.2** `git.rs`: implement `current_branch(repo) -> Result<String>`
+- [x] **4.1** `git.rs`: implement `run_git(repo, args)` helper (private)
+- [ ] **4.2** `git.rs`: implement `get_current_branch(repo) -> Result<String>`
 - [ ] **4.3** `git.rs`: implement `has_uncommitted_changes(repo) -> Result<bool>`
 - [ ] **4.4** `git.rs`: implement `stash(repo) -> Result<()>`
 - [ ] **4.5** `git.rs`: implement `stash_pop(repo) -> Result<()>`
