@@ -47,9 +47,10 @@ Build order: `git.rs` → `repo.rs` → `output.rs` → `main.rs`
 *Goal: If not a repo, find subdirectories that are repos*
 
 - [x] **3.1** `main.rs`: add logic to branch based on `is_git_repo` result
-- [ ] **3.2** `main.rs`: if not a repo, iterate subdirs, print each that is a repo
-- [ ] **3.3** `output.rs`: add `print_no_repos()` and `print_workspace_start(count)`
-- [ ] **3.4** Verify: run in a directory containing multiple git repos
+- [x] **3.2** `main.rs`: if not a repo, iterate subdirs, print each that is a repo
+- [x] **3.3** `repo.rs`: add logic to find all git repos in directory `find_git_repos` 
+- [ ] **3.4** `output.rs`: add `print_no_repos()` and `print_workspace_start(count)`
+- [ ] **3.5** Verify: run in a directory containing multiple git repos
 
 ---
 

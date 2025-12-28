@@ -5,11 +5,17 @@ fn main() -> anyhow::Result<()> {
     let cwd = std::env::current_dir()?;
     output::print_working_dir(&cwd);
 
-    let is_git_repo = repo::is_git_repo(&cwd);
-    if is_git_repo {
+    if repo::is_git_repo(&cwd) {
         println!("Git repo");
     } else {
-        println!("Not a git repo");
+        println!("Not a git repo, checking subdirectories...\n");
+
+        let sub_dirs = repo::find_git_repos(&cwd);
+
+        println!("Subdirectories count: {}", sub_dirs.len());
+        for sub_dir in &sub_dirs {
+            output::print_working_dir(sub_dir);
+        }
     }
 
     Ok(())
