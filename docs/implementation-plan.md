@@ -37,16 +37,16 @@ Build order: `git.rs` → `repo.rs` → `output.rs` → `main.rs`
 *Goal: Print working directory, detect if current dir is a git repo*
 
 - [x] **2.1** `output.rs`: implement `print_working_dir(path: &Path)`
-- [ ] **2.2** `repo.rs`: implement `is_git_repo(path: &Path) -> bool`
-- [ ] **2.3** `main.rs`: get cwd, print it, check if git repo, print result
-- [ ] **2.4** Verify: run in a git repo vs non-git directory, see different output
+- [x] **2.2** `repo.rs`: implement `is_git_repo(path: &Path) -> bool`
+- [x] **2.3** `main.rs`: get cwd, print it, check if git repo, print result
+- [x] **2.4** Verify: run in a git repo vs non-git directory, see different output
 
 ---
 
 ## Phase 3: Workspace Discovery (Stub)
 *Goal: If not a repo, find subdirectories that are repos*
 
-- [ ] **3.1** `main.rs`: add logic to branch based on `is_git_repo` result
+- [x] **3.1** `main.rs`: add logic to branch based on `is_git_repo` result
 - [ ] **3.2** `main.rs`: if not a repo, iterate subdirs, print each that is a repo
 - [ ] **3.3** `output.rs`: add `print_no_repos()` and `print_workspace_start(count)`
 - [ ] **3.4** Verify: run in a directory containing multiple git repos
