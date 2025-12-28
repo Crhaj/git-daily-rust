@@ -64,17 +64,17 @@ Build order: `git.rs` → `repo.rs` → `output.rs` → `main.rs`
 - [x] **4.5** `git.rs`: implement `stash_pop(repo) -> Result<()>`
 - [x] **4.6** `git.rs`: implement `checkout(repo, branch) -> Result<()>`
 - [x] **4.7** `git.rs`: implement `fetch_prune(repo) -> Result<()>`
-- [ ] **4.8** Verify: manually test each function in a test repo
+- [x] **4.8** Verify: manually test each function in a test repo
 
 ---
 
 ## Phase 5: Core Types
 *Goal: Define the data structures for update results*
 
-- [ ] **5.1** `repo.rs`: define `UpdateStep` enum
-- [ ] **5.2** `repo.rs`: define `UpdateOutcome` enum (Success, Failed)
-- [ ] **5.3** `repo.rs`: define `UpdateResult` struct
-- [ ] **5.4** Verify: `cargo build` succeeds
+- [x] **5.1** `repo.rs`: define `UpdateStep` enum
+- [x] **5.2** `repo.rs`: define `UpdateOutcome` enum (Success, Failed)
+- [x] **5.3** `repo.rs`: define `UpdateResult` struct
+- [x] **5.4** Verify: `cargo build` succeeds
 
 ---
 

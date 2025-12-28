@@ -12,6 +12,6 @@ fn main() -> anyhow::Result<()> {
         let sub_dirs = repo::find_git_repos(&cwd);
         output::print_workspace_start(sub_dirs.len());
     }
-    
+
     Ok(())
 }
