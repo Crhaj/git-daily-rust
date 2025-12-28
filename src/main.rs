@@ -14,5 +14,12 @@ fn main() -> anyhow::Result<()> {
         output::print_workspace_start(sub_dirs.len());
     }
 
+    println!("Current branch: {}", git::get_current_branch(&cwd)?);
+    println!("Has uncommitted changes: {}", git::has_uncommitted_changes(&cwd)?);
+    git::stash(&cwd)?;
+    git::stash_pop(&cwd)?;
+    git::fetch_prune(&cwd)?;
+
+    println!("Done!");
     Ok(())
 }
