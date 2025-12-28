@@ -88,8 +88,8 @@ Build order: `git.rs` → `repo.rs` → `output.rs` → `main.rs`
 - [x] **6.5** `repo.rs`: add fetch --prune
 - [x] **6.6** `repo.rs`: add restore original branch
 - [x] **6.7** `repo.rs`: add stash pop (if stashed)
-- [ ] **6.8** `main.rs`: call `repo::update()` for single repo mode (with `|_| {}` callback)
-- [ ] **6.9** Verify: manually test on a real repo with a feature branch
+- [x] **6.8** `main.rs`: call `repo::update()` for single repo mode (with `|_| {}` callback)
+- [x] **6.9** Verify: manually test on a real repo with a feature branch
 
 ---
 

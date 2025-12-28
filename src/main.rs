@@ -4,11 +4,15 @@ fn main() -> anyhow::Result<()> {
     let cwd = std::env::current_dir()?;
     output::print_working_dir(&cwd);
 
-    let sub_dirs = repo::find_git_repos(&cwd);
-    if sub_dirs.is_empty() {
-        println!("No git repos found in this directory");
+    if repo::is_git_repo(&cwd) {
+        repo::update(&cwd, |_| {});
     } else {
-        output::print_workspace_start(sub_dirs.len());
+        let sub_dirs = repo::find_git_repos(&cwd);
+        if sub_dirs.is_empty() {
+            println!("No git repos found in this directory");
+        } else {
+            output::print_workspace_start(sub_dirs.len());
+        }
     }
 
     Ok(())

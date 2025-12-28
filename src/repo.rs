@@ -35,14 +35,14 @@ struct UpdateError {
 }
 
 #[derive(Debug)]
-struct UpdateSuccess {
+pub struct UpdateSuccess {
     original_branch: String,
     master_branch: String,
     had_stash: bool,
 }
 
 #[derive(Debug)]
-struct UpdateFailure {
+pub struct UpdateFailure {
     error: String,
     step: UpdateStep,
 }
@@ -53,7 +53,7 @@ pub enum UpdateOutcome {
     Failed(UpdateFailure),
 }
 
-fn is_git_repo(path: &Path) -> bool {
+pub fn is_git_repo(path: &Path) -> bool {
     path.join(GIT_DIR).is_dir()
 }
 
@@ -67,18 +67,70 @@ pub fn find_git_repos(path: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-fn at_step<T>(step: UpdateStep, result: anyhow::Result<T>) -> Result<T, UpdateError> {
-    result.map_err(|e| UpdateError { source: e, step })
+fn run_step<T, F>(
+    step: UpdateStep,
+    on_progress: &F,
+    operation: impl FnOnce() -> anyhow::Result<T>,
+) -> Result<T, UpdateError>
+where
+    F: Fn(UpdateStep),
+{
+    on_progress(step.clone());
+    operation().map_err(|e| UpdateError { source: e, step })
+}
+
+fn checkout_master_or_main_branch<F>(path: &Path, on_step: &F) -> Result<&'static str, UpdateError>
+where
+    F: Fn(UpdateStep),
+{
+    match run_step(
+        UpdateStep::CheckingOut {
+            branch: MASTER_BRANCH.to_string(),
+        },
+        on_step,
+        || git::checkout(path, MASTER_BRANCH),
+    ) {
+        Ok(_) => Ok(MASTER_BRANCH),
+        Err(_) => {
+            run_step(
+                UpdateStep::CheckingOut {
+                    branch: MAIN_BRANCH.to_string(),
+                },
+                on_step,
+                || git::checkout(path, MAIN_BRANCH),
+            )?;
+            Ok(MAIN_BRANCH)
+        }
+    }
 }
 
 pub fn update<F>(path: &Path, on_step: F) -> UpdateResult
 where
     F: Fn(UpdateStep),
 {
-    UpdateResult {
-        path: path.to_path_buf(),
-        outcome: UpdateOutcome::Success(do_update(path, &on_step).unwrap()),
-        duration: Duration::from_secs(0),
+    on_step(UpdateStep::Started);
+
+    let start = std::time::Instant::now();
+    // main logic running in the do_update fn
+    let result = do_update(path, &on_step);
+    let duration = start.elapsed();
+
+    on_step(UpdateStep::Completed);
+
+    match result {
+        Ok(success) => UpdateResult {
+            path: path.to_path_buf(),
+            outcome: UpdateOutcome::Success(success),
+            duration,
+        },
+        Err(error) => UpdateResult {
+            path: path.to_path_buf(),
+            outcome: UpdateOutcome::Failed(UpdateFailure {
+                error: error.source.to_string(),
+                step: error.step,
+            }),
+            duration,
+        },
     }
 }
 
@@ -86,60 +138,31 @@ fn do_update<F>(path: &Path, on_step: &F) -> Result<UpdateSuccess, UpdateError>
 where
     F: Fn(UpdateStep),
 {
-    on_step(UpdateStep::Started);
+    let original_branch = run_step(UpdateStep::DetectingBranch, on_step, || {
+        git::get_current_branch(path)
+    })?;
 
-    on_step(UpdateStep::DetectingBranch);
-    let original_branch = at_step(UpdateStep::DetectingBranch, git::get_current_branch(path))?;
-
-    on_step(UpdateStep::CheckingChanges);
-    let is_dirty = at_step(
-        UpdateStep::CheckingChanges,
-        git::has_uncommitted_changes(path),
-    )?;
+    let is_dirty = run_step(UpdateStep::CheckingChanges, on_step, || {
+        git::has_uncommitted_changes(path)
+    })?;
 
     if is_dirty {
-        on_step(UpdateStep::Stashing);
-        at_step(UpdateStep::Stashing, git::stash(path))?;
+        run_step(UpdateStep::Stashing, on_step, || git::stash(path))?;
     }
+    let master_or_main_branch = checkout_master_or_main_branch(path, on_step)?;
 
-    on_step(UpdateStep::CheckingOut {
-        branch: MASTER_BRANCH.to_string(),
-    });
-    let master_or_main_branch = match git::checkout(path, MASTER_BRANCH) {
-        Ok(_) => MASTER_BRANCH,
-        Err(_) => {
-            on_step(UpdateStep::CheckingOut {
-                branch: MAIN_BRANCH.to_string(),
-            });
-            at_step(
-                UpdateStep::CheckingOut {
-                    branch: MAIN_BRANCH.to_string(),
-                },
-                git::checkout(path, MAIN_BRANCH),
-            )?;
-            MAIN_BRANCH
-        }
-    };
-
-    on_step(UpdateStep::Fetching);
-    at_step(UpdateStep::Fetching, git::fetch_prune(path))?;
-
-    on_step(UpdateStep::RestoringBranch {
-        branch: original_branch.clone(),
-    });
-    at_step(
+    run_step(UpdateStep::Fetching, on_step, || git::fetch_prune(path))?;
+    run_step(
         UpdateStep::RestoringBranch {
             branch: original_branch.clone(),
         },
-        git::checkout(path, &original_branch),
+        on_step,
+        || git::checkout(path, &original_branch),
     )?;
 
     if is_dirty {
-        on_step(UpdateStep::PoppingStash);
-        at_step(UpdateStep::PoppingStash, git::stash_pop(path))?;
+        run_step(UpdateStep::PoppingStash, on_step, || git::stash_pop(path))?;
     }
-
-    on_step(UpdateStep::Completed);
 
     Ok(UpdateSuccess {
         original_branch,
