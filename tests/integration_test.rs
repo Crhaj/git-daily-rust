@@ -100,19 +100,49 @@ fn test_file_exists() -> anyhow::Result<()> {
 fn test_update_returns_to_original_branch() -> anyhow::Result<()> {
     let (repo, _remote) = TestRepo::with_remote()?;
 
-    // Create and checkout a feature branch
     repo.create_branch("feature")?;
     git::checkout(repo.path(), "feature")?;
 
-    // Run update
     let result = repo::update(repo.path(), |_| {});
 
-    // Verify success
     assert!(matches!(result.outcome, UpdateOutcome::Success(_)));
 
-    // Verify we're back on feature branch
     let branch = git::get_current_branch(repo.path())?;
     assert_eq!(branch, "feature");
+
+    Ok(())
+}
+
+#[test]
+fn test_update_stashes_and_restores_uncommitted_changes() -> anyhow::Result<()> {
+    let (repo, _remote) = TestRepo::with_remote()?;
+
+    repo.make_dirty()?;
+    assert!(git::has_uncommitted_changes(repo.path())?);
+
+    let result = repo::update(repo.path(), |_| {});
+
+    assert!(matches!(result.outcome, UpdateOutcome::Success(_)));
+    assert!(git::has_uncommitted_changes(repo.path())?);
+    assert!(!repo.has_stash()?);
+
+    Ok(())
+}
+
+#[test]
+fn test_update_untracked_only_no_pop() -> anyhow::Result<()> {
+    let (repo, _remote) = TestRepo::with_remote()?;
+
+    repo.make_untracked()?;
+    assert!(!repo.has_stash()?);
+    assert!(git::has_uncommitted_changes(repo.path())?);
+
+    let result = repo::update(repo.path(), |_| {});
+
+    assert!(matches!(result.outcome, UpdateOutcome::Success(_)));
+
+    assert!(!repo.has_stash()?);
+    assert!(git::has_uncommitted_changes(repo.path())?);
 
     Ok(())
 }

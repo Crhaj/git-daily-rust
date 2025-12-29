@@ -172,8 +172,8 @@ production code and the "who tests the tests?" problem.
 
 - [x] **11.1** Create `tests/integration_test.rs`
 - [x] **11.2** Test: updates repo and returns to the original branch
-- [ ] **11.3** Test: stashes and restores uncommitted changes (modified tracked files)
-- [ ] **11.4** Test: handles untracked files only (no stash created, no pop attempted)
+- [x] **11.3** Test: stashes and restores uncommitted changes (modified tracked files)
+- [x] **11.4** Test: handles untracked files only (no stash created, no pop attempted)
 - [ ] **11.5** Test: handles repo already on main
 - [ ] **11.6** Test: falls back to main when no master branch
 - [ ] **11.7** Test: reports failure when fetch fails (no remote)
