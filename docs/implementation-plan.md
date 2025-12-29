@@ -128,15 +128,42 @@ Build order: `git.rs` → `repo.rs` → `output.rs` → `main.rs`
 
 ---
 
+## Phase 9.5: Bug Fix - Stash with Untracked Files Only
+*Goal: Fix failure when repo has only untracked files*
+
+**Problem**: When a repo has only untracked files (no modified tracked files):
+- `git status --porcelain` shows `??` lines → `has_uncommitted_changes()` returns true
+- `git stash` does nothing (untracked files aren't stashed by default)
+- We incorrectly set `had_stash = true`
+- `git stash pop` fails because there's nothing to pop
+
+**Solution**: Change `stash()` to return `bool` indicating if a stash was actually created.
+
+- [ ] **9.5.1** `git.rs`: change `stash(repo) -> Result<bool>` - return false if "No local changes to save"
+- [ ] **9.5.2** `repo.rs`: use return value of `stash()` for `had_stash` instead of `is_dirty`
+- [ ] **9.5.3** Verify: test with repo containing only untracked files
+
+---
+
 ## Phase 10: Test Infrastructure
 *Goal: TestRepo helper ready for integration tests*
 
+**Design Principle**: Reuse production `git.rs` functions in tests. Only create test-specific
+helpers for environment setup and queries that don't exist in production.
+
 - [ ] **10.1** Create `tests/common/mod.rs`
-- [ ] **10.2** Implement `TestRepo::new()` - basic repo with initial commit
-- [ ] **10.3** Implement `TestRepo::with_remote()` - clone setup
-- [ ] **10.4** Implement helper methods: `current_branch()`, `create_branch()`, `checkout()`
-- [ ] **10.5** Implement helper methods: `make_dirty()`, `has_stash()`, `file_exists()`
-- [ ] **10.6** Verify: write a trivial test that creates and uses TestRepo
+- [ ] **10.2** Implement `TestRepo::new()` - temp dir, git init, configure user, initial commit
+- [ ] **10.3** Implement `TestRepo::with_remote()` - bare repo as origin, push initial commit
+- [ ] **10.4** Implement `TestRepo::create_branch(name)` - creates branch without checkout
+- [ ] **10.5** Implement `TestRepo::make_dirty()` - creates uncommitted file
+- [ ] **10.6** Implement `TestRepo::make_untracked()` - creates untracked file (for 9.5 bug test)
+- [ ] **10.7** Implement `TestRepo::has_stash()` - test-specific query
+- [ ] **10.8** Implement `TestRepo::file_exists(name)` - convenience for verification
+- [ ] **10.9** Verify: write a trivial test that creates and uses TestRepo
+
+**Note**: Do NOT implement `current_branch()` or `checkout()` - tests should use
+`git::get_current_branch()` and `git::checkout()` directly to avoid duplicating
+production code and the "who tests the tests?" problem.
 
 ---
 
@@ -145,11 +172,12 @@ Build order: `git.rs` → `repo.rs` → `output.rs` → `main.rs`
 
 - [ ] **11.1** Create `tests/integration_test.rs`
 - [ ] **11.2** Test: updates repo and returns to original branch
-- [ ] **11.3** Test: stashes and restores uncommitted changes
-- [ ] **11.4** Test: handles repo already on main
-- [ ] **11.5** Test: falls back to main when no master branch
-- [ ] **11.6** Test: reports failure when fetch fails (no remote)
-- [ ] **11.7** Verify: `cargo test` passes
+- [ ] **11.3** Test: stashes and restores uncommitted changes (modified tracked files)
+- [ ] **11.4** Test: handles untracked files only (no stash created, no pop attempted)
+- [ ] **11.5** Test: handles repo already on main
+- [ ] **11.6** Test: falls back to main when no master branch
+- [ ] **11.7** Test: reports failure when fetch fails (no remote)
+- [ ] **11.8** Verify: `cargo test` passes
 
 ---
 
@@ -174,6 +202,7 @@ Build order: `git.rs` → `repo.rs` → `output.rs` → `main.rs`
 | 4-6 | Core Logic | Single repo updates successfully |
 | 7-8 | UX | Colored output and progress bars work |
 | 9 | Parallelism | Multiple repos update simultaneously |
+| 9.5 | Bug Fix | Repos with only untracked files don't fail |
 | 10-11 | Tests | `cargo test` passes |
 | 12 | Polish | Ready for daily use |
 
