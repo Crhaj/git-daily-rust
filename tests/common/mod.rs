@@ -13,12 +13,11 @@ pub struct TestRepo {
 }
 
 impl TestRepo {
-    /// Creates a new test repository with an initial commit on the master branch.
-    pub fn new() -> Result<Self> {
+    fn new_with_branch(branch: &str) -> Result<Self> {
         let temp_dir = TempDir::new()?;
         let path = temp_dir.path().to_path_buf();
 
-        run_git(&path, &["init", "-b", "master"])?;
+        run_git(&path, &["init", "-b", branch])?;
 
         run_git(&path, &["config", "user.email", "test@example.com"])?;
         run_git(&path, &["config", "user.name", "Test User"])?;
@@ -33,19 +32,25 @@ impl TestRepo {
         })
     }
 
+    /// Creates a new test repository with an initial commit on the master branch.
+    pub fn new() -> Result<Self> {
+        Self::new_with_branch("master")
+    }
+
     /// Creates a test repository with a configured remote.
     /// Returns the repo and the remote TempDir (must be kept alive).
-    pub fn with_remote() -> Result<(Self, TempDir)> {
+    pub fn with_remote(branch: Option<&str>) -> Result<(Self, TempDir)> {
+        let branch = branch.unwrap_or("master");
         let remote_dir = TempDir::new()?;
         run_git(remote_dir.path(), &["init", "--bare"])?;
 
-        let local = Self::new()?;
+        let local = Self::new_with_branch(branch)?;
 
         run_git(
             &local.path,
             &["remote", "add", "origin", remote_dir.path().to_str().unwrap()],
         )?;
-        run_git(&local.path, &["push", "-u", "origin", "master"])?;
+        run_git(&local.path, &["push", "-u", "origin", branch])?;
 
         Ok((local, remote_dir))
     }

@@ -174,10 +174,10 @@ production code and the "who tests the tests?" problem.
 - [x] **11.2** Test: updates repo and returns to the original branch
 - [x] **11.3** Test: stashes and restores uncommitted changes (modified tracked files)
 - [x] **11.4** Test: handles untracked files only (no stash created, no pop attempted)
-- [ ] **11.5** Test: handles repo already on main
-- [ ] **11.6** Test: falls back to main when no master branch
-- [ ] **11.7** Test: reports failure when fetch fails (no remote)
-- [ ] **11.8** Verify: `cargo test` passes
+- [x] **11.5** Test: handles repo already on main
+- [x] **11.6** Test: falls back to main when no master branch
+- [x] **11.7** Test: reports failure when fetch fails (no remote)
+- [x] **11.8** Verify: `cargo test` passes
 
 ---
 
