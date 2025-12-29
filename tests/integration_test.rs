@@ -2,6 +2,7 @@ mod common;
 
 use common::TestRepo;
 use git_daily_rust::git;
+use git_daily_rust::repo::{self, UpdateOutcome};
 
 #[test]
 fn test_repo_creation() -> anyhow::Result<()> {
@@ -91,6 +92,27 @@ fn test_file_exists() -> anyhow::Result<()> {
 
     assert!(repo.file_exists("README.md"));
     assert!(!repo.file_exists("nonexistent.txt"));
+
+    Ok(())
+}
+
+#[test]
+fn test_update_returns_to_original_branch() -> anyhow::Result<()> {
+    let (repo, _remote) = TestRepo::with_remote()?;
+
+    // Create and checkout a feature branch
+    repo.create_branch("feature")?;
+    git::checkout(repo.path(), "feature")?;
+
+    // Run update
+    let result = repo::update(repo.path(), |_| {});
+
+    // Verify success
+    assert!(matches!(result.outcome, UpdateOutcome::Success(_)));
+
+    // Verify we're back on feature branch
+    let branch = git::get_current_branch(repo.path())?;
+    assert_eq!(branch, "feature");
 
     Ok(())
 }
