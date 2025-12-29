@@ -1,46 +1,37 @@
 mod common;
 
-use common::{init_repo, TestRepo};
+use common::{init_repo, setup_workspace_with_repos, CountingCallbacks, TestRepo};
 use git_daily_rust::git;
-use git_daily_rust::repo::{self, NoOpCallbacks, UpdateCallbacks, UpdateOutcome, UpdateStep};
+use git_daily_rust::repo::{self, NoOpCallbacks, UpdateOutcome, UpdateStep};
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use tempfile::TempDir;
 
 #[test]
 fn test_repo_creation() -> anyhow::Result<()> {
     let repo = TestRepo::new()?;
-
     let branch = git::get_current_branch(repo.path())?;
     assert_eq!(branch, "master");
-
     Ok(())
 }
 
 #[test]
 fn test_repo_with_remote() -> anyhow::Result<()> {
     let (repo, _remote) = TestRepo::with_remote(None)?;
-
     let branch = git::get_current_branch(repo.path())?;
     assert_eq!(branch, "master");
-
     git::fetch_prune(repo.path())?;
-
     Ok(())
 }
 
 #[test]
 fn test_create_branch() -> anyhow::Result<()> {
     let repo = TestRepo::new()?;
-
     repo.create_branch("feature")?;
 
-    // Still on master
     let branch = git::get_current_branch(repo.path())?;
     assert_eq!(branch, "master");
 
-    // Can checkout the new branch
     git::checkout(repo.path(), "feature")?;
     let branch = git::get_current_branch(repo.path())?;
     assert_eq!(branch, "feature");
@@ -51,76 +42,57 @@ fn test_create_branch() -> anyhow::Result<()> {
 #[test]
 fn test_make_dirty() -> anyhow::Result<()> {
     let repo = TestRepo::new()?;
-
     assert!(!git::has_uncommitted_changes(repo.path())?);
-
     repo.make_dirty()?;
-
     assert!(git::has_uncommitted_changes(repo.path())?);
-
     Ok(())
 }
 
 #[test]
 fn test_make_untracked() -> anyhow::Result<()> {
     let repo = TestRepo::new()?;
-
     assert!(!repo.file_exists("untracked.txt"));
-
     repo.make_untracked()?;
-
     assert!(repo.file_exists("untracked.txt"));
-    // Untracked files also show up in has_uncommitted_changes
     assert!(git::has_uncommitted_changes(repo.path())?);
-
     Ok(())
 }
 
 #[test]
 fn test_has_stash() -> anyhow::Result<()> {
     let repo = TestRepo::new()?;
-
     assert!(!repo.has_stash()?);
-
     repo.make_dirty()?;
     git::stash(repo.path())?;
-
     assert!(repo.has_stash()?);
-
     Ok(())
 }
 
 #[test]
 fn test_file_exists() -> anyhow::Result<()> {
     let repo = TestRepo::new()?;
-
     assert!(repo.file_exists("README.md"));
     assert!(!repo.file_exists("nonexistent.txt"));
-
     Ok(())
 }
 
 #[test]
 fn test_update_returns_to_original_branch() -> anyhow::Result<()> {
     let (repo, _remote) = TestRepo::with_remote(None)?;
-
     repo.create_branch("feature")?;
     git::checkout(repo.path(), "feature")?;
 
     let result = repo::update(repo.path(), |_| {});
 
     assert!(matches!(result.outcome, UpdateOutcome::Success(_)));
-
     let branch = git::get_current_branch(repo.path())?;
     assert_eq!(branch, "feature");
-
     Ok(())
 }
 
 #[test]
 fn test_update_stashes_and_restores_uncommitted_changes() -> anyhow::Result<()> {
     let (repo, _remote) = TestRepo::with_remote(None)?;
-
     repo.make_dirty()?;
     assert!(git::has_uncommitted_changes(repo.path())?);
 
@@ -129,14 +101,12 @@ fn test_update_stashes_and_restores_uncommitted_changes() -> anyhow::Result<()> 
     assert!(matches!(result.outcome, UpdateOutcome::Success(_)));
     assert!(git::has_uncommitted_changes(repo.path())?);
     assert!(!repo.has_stash()?);
-
     Ok(())
 }
 
 #[test]
 fn test_update_untracked_only_no_pop() -> anyhow::Result<()> {
     let (repo, _remote) = TestRepo::with_remote(None)?;
-
     repo.make_untracked()?;
     assert!(!repo.has_stash()?);
     assert!(git::has_uncommitted_changes(repo.path())?);
@@ -144,17 +114,14 @@ fn test_update_untracked_only_no_pop() -> anyhow::Result<()> {
     let result = repo::update(repo.path(), |_| {});
 
     assert!(matches!(result.outcome, UpdateOutcome::Success(_)));
-
     assert!(!repo.has_stash()?);
     assert!(git::has_uncommitted_changes(repo.path())?);
-
     Ok(())
 }
 
 #[test]
 fn test_update_handles_repo_already_on_main() -> anyhow::Result<()> {
     let (repo, _remote) = TestRepo::with_remote(Some("main"))?;
-
     let branch = git::get_current_branch(repo.path())?;
     assert_eq!(branch, "main");
 
@@ -163,14 +130,12 @@ fn test_update_handles_repo_already_on_main() -> anyhow::Result<()> {
     assert!(matches!(result.outcome, UpdateOutcome::Success(_)));
     let branch = git::get_current_branch(repo.path())?;
     assert_eq!(branch, "main");
-
     Ok(())
 }
 
 #[test]
 fn test_update_falls_back_to_main_when_no_master_branch() -> anyhow::Result<()> {
     let (repo, _remote) = TestRepo::with_remote(Some("main"))?;
-
     repo.create_branch("feature")?;
     git::checkout(repo.path(), "feature")?;
 
@@ -186,48 +151,22 @@ fn test_update_falls_back_to_main_when_no_master_branch() -> anyhow::Result<()> 
 
     let branch = git::get_current_branch(repo.path())?;
     assert_eq!(branch, "feature");
-
     Ok(())
 }
 
 #[test]
 fn test_update_reports_failure_when_fetch_fails_without_remote() -> anyhow::Result<()> {
     let (repo, remote) = TestRepo::with_remote(None)?;
-    // Ensure the remote is gone before fetch runs.
     drop(remote);
 
     let result = repo::update(repo.path(), |_| {});
 
     match result.outcome {
         UpdateOutcome::Failed(failure) => {
-            assert!(matches!(failure.step, repo::UpdateStep::Fetching));
+            assert_eq!(failure.step, UpdateStep::Fetching);
             assert!(failure.error.contains("fetch"));
         }
         UpdateOutcome::Success(_) => anyhow::bail!("expected update to fail without a remote"),
-    }
-
-    Ok(())
-}
-
-/// Helper to set up a workspace with multiple repos and their remotes
-fn setup_workspace_with_repos(
-    workspace: &TempDir,
-    repo_configs: &[(&str, &str)], // (name, branch)
-) -> anyhow::Result<()> {
-    for (name, branch) in repo_configs {
-        let repo_path = workspace.path().join(name);
-        let remote_path = workspace.path().join(format!("{}-remote", name));
-
-        std::fs::create_dir_all(&repo_path)?;
-        std::fs::create_dir_all(&remote_path)?;
-
-        init_repo(&repo_path, branch)?;
-        git::run_git(&remote_path, &["init", "--bare"])?;
-        git::run_git(
-            &repo_path,
-            &["remote", "add", "origin", remote_path.to_str().unwrap()],
-        )?;
-        git::run_git(&repo_path, &["push", "-u", "origin", branch])?;
     }
     Ok(())
 }
@@ -240,26 +179,19 @@ fn test_update_workspace_updates_multiple_repos() -> anyhow::Result<()> {
     let repos = repo::find_git_repos(workspace.path());
     assert_eq!(repos.len(), 2);
 
-    // Use the simplified NoOpCallbacks
     let results = repo::update_workspace(&repos, |_| NoOpCallbacks);
 
     assert_eq!(results.len(), 2);
     assert!(results
         .iter()
         .all(|result| matches!(result.outcome, UpdateOutcome::Success(_))));
-
     Ok(())
 }
-
-// ============================================================================
-// Complex Workspace Test Cases
-// ============================================================================
 
 #[test]
 fn test_workspace_mixed_success_and_failure() -> anyhow::Result<()> {
     let workspace = TempDir::new()?;
 
-    // Setup repo-a with remote (will succeed)
     let repo_a = workspace.path().join("repo-a");
     let remote_a = workspace.path().join("repo-a-remote");
     std::fs::create_dir_all(&repo_a)?;
@@ -272,11 +204,9 @@ fn test_workspace_mixed_success_and_failure() -> anyhow::Result<()> {
     )?;
     git::run_git(&repo_a, &["push", "-u", "origin", "master"])?;
 
-    // Setup repo-b with a remote that points to a non-existent path (will fail at fetch)
     let repo_b = workspace.path().join("repo-b");
     std::fs::create_dir_all(&repo_b)?;
     init_repo(&repo_b, "master")?;
-    // Add remote pointing to non-existent path - fetch will fail
     git::run_git(&repo_b, &["remote", "add", "origin", "/nonexistent/path"])?;
 
     let repos = repo::find_git_repos(workspace.path());
@@ -293,7 +223,6 @@ fn test_workspace_mixed_success_and_failure() -> anyhow::Result<()> {
     assert_eq!(successes.len(), 1);
     assert_eq!(failures.len(), 1);
 
-    // Verify the failure has correct step info
     let failure = failures.first().unwrap();
     match &failure.outcome {
         UpdateOutcome::Failed(f) => {
@@ -301,7 +230,6 @@ fn test_workspace_mixed_success_and_failure() -> anyhow::Result<()> {
         }
         _ => panic!("Expected failure"),
     }
-
     Ok(())
 }
 
@@ -314,23 +242,18 @@ fn test_workspace_with_dirty_repos() -> anyhow::Result<()> {
     )?;
 
     let dirty_path = workspace.path().join("repo-dirty");
-
-    // Make repo-dirty have uncommitted changes
     std::fs::write(dirty_path.join("README.md"), "# Modified\n")?;
     assert!(git::has_uncommitted_changes(&dirty_path)?);
 
     let repos = repo::find_git_repos(workspace.path());
     let results = repo::update_workspace(&repos, |_| NoOpCallbacks);
 
-    // Both should succeed
     assert!(results
         .iter()
         .all(|r| matches!(r.outcome, UpdateOutcome::Success(_))));
 
-    // Dirty repo should still have uncommitted changes (restored from stash)
     assert!(git::has_uncommitted_changes(&dirty_path)?);
 
-    // Verify stash details in result
     let dirty_result = results
         .iter()
         .find(|r| r.path.ends_with("repo-dirty"))
@@ -339,48 +262,7 @@ fn test_workspace_with_dirty_repos() -> anyhow::Result<()> {
         UpdateOutcome::Success(s) => assert!(s.had_stash),
         _ => panic!("Expected success"),
     }
-
     Ok(())
-}
-
-/// Callbacks that count invocations for testing
-struct CountingCallbacks {
-    step_count: Arc<AtomicUsize>,
-    complete_count: Arc<AtomicUsize>,
-}
-
-impl CountingCallbacks {
-    fn new() -> (Self, Arc<AtomicUsize>, Arc<AtomicUsize>) {
-        let step_count = Arc::new(AtomicUsize::new(0));
-        let complete_count = Arc::new(AtomicUsize::new(0));
-        (
-            Self {
-                step_count: Arc::clone(&step_count),
-                complete_count: Arc::clone(&complete_count),
-            },
-            step_count,
-            complete_count,
-        )
-    }
-}
-
-impl Clone for CountingCallbacks {
-    fn clone(&self) -> Self {
-        Self {
-            step_count: Arc::clone(&self.step_count),
-            complete_count: Arc::clone(&self.complete_count),
-        }
-    }
-}
-
-impl UpdateCallbacks for CountingCallbacks {
-    fn on_step(&self, _step: &UpdateStep) {
-        self.step_count.fetch_add(1, Ordering::SeqCst);
-    }
-
-    fn on_complete(&self, _result: &repo::UpdateResult) {
-        self.complete_count.fetch_add(1, Ordering::SeqCst);
-    }
 }
 
 #[test]
@@ -399,25 +281,17 @@ fn test_workspace_callbacks_called_for_each_repo() -> anyhow::Result<()> {
     assert_eq!(repos.len(), 3);
 
     let (callbacks, step_count, complete_count) = CountingCallbacks::new();
-
-    // Use update_workspace_with to share callbacks across repos
     let results = repo::update_workspace_with(&repos, callbacks);
 
     assert_eq!(results.len(), 3);
-
-    // on_complete should be called exactly once per repo
     assert_eq!(complete_count.load(Ordering::SeqCst), 3);
 
-    // on_step should be called multiple times per repo (Started, DetectingBranch, etc.)
-    // Each successful update calls: Started, DetectingBranch, CheckingChanges, CheckingOut, Fetching, RestoringBranch, Completed
-    // That's at least 7 steps per repo = 21 minimum
     let total_steps = step_count.load(Ordering::SeqCst);
     assert!(
         total_steps >= 21,
         "Expected at least 21 step callbacks, got {}",
         total_steps
     );
-
     Ok(())
 }
 
@@ -426,13 +300,9 @@ fn test_workspace_repos_on_different_branches() -> anyhow::Result<()> {
     let workspace = TempDir::new()?;
     setup_workspace_with_repos(
         &workspace,
-        &[
-            ("repo-on-master", "master"),
-            ("repo-on-main", "main"),
-        ],
+        &[("repo-on-master", "master"), ("repo-on-main", "main")],
     )?;
 
-    // Create feature branches and switch to them
     let master_repo = workspace.path().join("repo-on-master");
     let main_repo = workspace.path().join("repo-on-main");
 
@@ -450,11 +320,9 @@ fn test_workspace_repos_on_different_branches() -> anyhow::Result<()> {
         .iter()
         .all(|r| matches!(r.outcome, UpdateOutcome::Success(_))));
 
-    // Each repo should return to its original branch
     assert_eq!(git::get_current_branch(&master_repo)?, "feature-x");
     assert_eq!(git::get_current_branch(&main_repo)?, "develop");
 
-    // Verify the results contain correct branch info
     for result in &results {
         match &result.outcome {
             UpdateOutcome::Success(s) => {
@@ -469,20 +337,17 @@ fn test_workspace_repos_on_different_branches() -> anyhow::Result<()> {
             _ => panic!("Expected success"),
         }
     }
-
     Ok(())
 }
 
 #[test]
 fn test_workspace_empty_directory() -> anyhow::Result<()> {
     let workspace = TempDir::new()?;
-
     let repos = repo::find_git_repos(workspace.path());
     assert!(repos.is_empty());
 
     let results = repo::update_workspace(&repos, |_| NoOpCallbacks);
     assert!(results.is_empty());
-
     Ok(())
 }
 
@@ -490,22 +355,18 @@ fn test_workspace_empty_directory() -> anyhow::Result<()> {
 fn test_workspace_nested_repos_not_discovered() -> anyhow::Result<()> {
     let workspace = TempDir::new()?;
 
-    // Create outer repo
     let outer_repo = workspace.path().join("outer-repo");
     std::fs::create_dir_all(&outer_repo)?;
     init_repo(&outer_repo, "master")?;
 
-    // Create nested repo inside outer repo
     let nested_repo = outer_repo.join("nested-repo");
     std::fs::create_dir_all(&nested_repo)?;
     init_repo(&nested_repo, "master")?;
 
     let repos = repo::find_git_repos(workspace.path());
 
-    // Only outer-repo should be discovered, not nested-repo
     assert_eq!(repos.len(), 1);
     assert!(repos[0].ends_with("outer-repo"));
-
     Ok(())
 }
 
@@ -514,16 +375,10 @@ fn test_workspace_order_independence() -> anyhow::Result<()> {
     let workspace = TempDir::new()?;
     setup_workspace_with_repos(
         &workspace,
-        &[
-            ("alpha", "master"),
-            ("beta", "master"),
-            ("gamma", "master"),
-        ],
+        &[("alpha", "master"), ("beta", "master"), ("gamma", "master")],
     )?;
 
     let repos = repo::find_git_repos(workspace.path());
-
-    // Run multiple times and verify we always get the same repos (order may differ)
     let expected_names: HashSet<&str> = ["alpha", "beta", "gamma"].into_iter().collect();
 
     for _ in 0..3 {
@@ -538,7 +393,6 @@ fn test_workspace_order_independence() -> anyhow::Result<()> {
 
         assert_eq!(result_names, expected_names);
     }
-
     Ok(())
 }
 
@@ -548,8 +402,6 @@ fn test_workspace_with_untracked_files_only() -> anyhow::Result<()> {
     setup_workspace_with_repos(&workspace, &[("repo-untracked", "master")])?;
 
     let repo_path = workspace.path().join("repo-untracked");
-
-    // Add untracked file (not staged)
     std::fs::write(repo_path.join("untracked.txt"), "untracked content\n")?;
     assert!(git::has_uncommitted_changes(&repo_path)?);
 
@@ -559,14 +411,11 @@ fn test_workspace_with_untracked_files_only() -> anyhow::Result<()> {
     assert_eq!(results.len(), 1);
     match &results[0].outcome {
         UpdateOutcome::Success(s) => {
-            // Untracked files don't get stashed by default, so had_stash should be false
             assert!(!s.had_stash);
         }
         UpdateOutcome::Failed(f) => panic!("Expected success, got failure: {}", f.error),
     }
 
-    // Untracked file should still exist
     assert!(repo_path.join("untracked.txt").exists());
-
     Ok(())
 }

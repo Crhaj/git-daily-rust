@@ -12,51 +12,10 @@ const MASTER_BRANCH: &str = "master";
 const MAIN_BRANCH: &str = "main";
 const GIT_DIR: &str = ".git";
 
-/// Represents a step in the repository update process.
-///
-/// Each variant represents a distinct phase of the update operation.
-/// Callbacks receive these to track progress.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum UpdateStep {
-    Started,
-    DetectingBranch,
-    CheckingChanges,
-    Stashing,
-    CheckingOut { branch: String },
-    Fetching,
-    RestoringBranch { branch: String },
-    PoppingStash,
-    Completed,
-}
-
-#[derive(Debug)]
-pub struct UpdateResult {
-    pub path: PathBuf,
-    pub outcome: UpdateOutcome,
-    pub duration: Duration,
-}
-
 /// Callbacks for monitoring repository update progress.
 ///
 /// Implement this trait to receive notifications during the update process.
-/// For simple cases, use [`NoOpCallbacks`] or implement the trait on your own type.
-///
-/// # Example
-///
-/// ```ignore
-/// use git_daily_rust::repo::{UpdateCallbacks, UpdateStep, UpdateResult};
-///
-/// struct MyCallbacks;
-///
-/// impl UpdateCallbacks for MyCallbacks {
-///     fn on_step(&self, step: &UpdateStep) {
-///         println!("Step: {:?}", step);
-///     }
-///     fn on_complete(&self, result: &UpdateResult) {
-///         println!("Done: {:?}", result.path);
-///     }
-/// }
-/// ```
+/// Use [`NoOpCallbacks`] when progress tracking is not needed.
 pub trait UpdateCallbacks: Send + Sync {
     /// Called when an update step begins.
     fn on_step(&self, step: &UpdateStep);
@@ -65,10 +24,51 @@ pub trait UpdateCallbacks: Send + Sync {
     fn on_complete(&self, result: &UpdateResult);
 }
 
-/// Default no-op callbacks for when progress tracking is not needed.
-///
-/// This is a zero-cost abstraction - no heap allocations or dynamic dispatch
-/// when used directly (monomorphized).
+/// Represents a step in the repository update process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateStep {
+    Started,
+    DetectingBranch,
+    CheckingChanges,
+    Stashing,
+    CheckingOut,
+    Fetching,
+    RestoringBranch,
+    PoppingStash,
+    Completed,
+}
+
+/// Result of a repository update operation.
+#[derive(Debug, Clone)]
+pub struct UpdateResult {
+    pub path: PathBuf,
+    pub outcome: UpdateOutcome,
+    pub duration: Duration,
+}
+
+/// Outcome of an update: success or failure.
+#[derive(Debug, Clone)]
+pub enum UpdateOutcome {
+    Success(UpdateSuccess),
+    Failed(UpdateFailure),
+}
+
+/// Details of a successful update.
+#[derive(Debug, Clone)]
+pub struct UpdateSuccess {
+    pub original_branch: String,
+    pub master_branch: String,
+    pub had_stash: bool,
+}
+
+/// Details of a failed update.
+#[derive(Debug, Clone)]
+pub struct UpdateFailure {
+    pub error: String,
+    pub step: UpdateStep,
+}
+
+/// No-op callbacks for when progress tracking is not needed.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoOpCallbacks;
 
@@ -80,16 +80,7 @@ impl UpdateCallbacks for NoOpCallbacks {
     fn on_complete(&self, _result: &UpdateResult) {}
 }
 
-/// Blanket implementation for closure tuples.
-///
-/// Allows using a tuple of two closures as callbacks:
-///
-/// ```ignore
-/// let callbacks = (
-///     |step: &UpdateStep| println!("{:?}", step),
-///     |result: &UpdateResult| println!("done"),
-/// );
-/// ```
+/// Blanket implementation allowing tuple of closures as callbacks.
 impl<F1, F2> UpdateCallbacks for (F1, F2)
 where
     F1: Fn(&UpdateStep) + Send + Sync,
@@ -103,26 +94,6 @@ where
     }
 }
 
-#[derive(Debug)]
-pub struct UpdateSuccess {
-    pub original_branch: String,
-    pub master_branch: String,
-    pub had_stash: bool,
-}
-
-#[derive(Debug)]
-pub struct UpdateFailure {
-    pub error: String,
-    pub step: UpdateStep,
-}
-
-#[derive(Debug)]
-pub enum UpdateOutcome {
-    Success(UpdateSuccess),
-    Failed(UpdateFailure),
-}
-
-#[derive(Debug)]
 struct UpdateError {
     source: anyhow::Error,
     step: UpdateStep,
@@ -142,6 +113,7 @@ pub fn find_git_repos(path: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Updates a single repository, calling `on_step` for each phase.
 pub fn update<F>(path: &Path, on_step: F) -> UpdateResult
 where
     F: Fn(&UpdateStep),
@@ -172,23 +144,6 @@ where
 }
 
 /// Updates multiple repositories in parallel with per-repository callbacks.
-///
-/// This function iterates over the provided repositories in parallel using rayon,
-/// calling `make_callbacks` to create a callbacks instance for each repository.
-/// This allows per-repo customization of progress tracking.
-///
-/// # Arguments
-///
-/// * `repos` - Slice of repository paths to update
-/// * `make_callbacks` - Factory function that creates callbacks for each repository
-///
-/// # Example
-///
-/// ```ignore
-/// use git_daily_rust::repo::{update_workspace, NoOpCallbacks};
-///
-/// let results = update_workspace(&repos, |_path| NoOpCallbacks);
-/// ```
 pub fn update_workspace<F, C>(repos: &[PathBuf], make_callbacks: F) -> Vec<UpdateResult>
 where
     F: Fn(&Path) -> C + Sync,
@@ -206,17 +161,6 @@ where
 }
 
 /// Updates multiple repositories in parallel with shared callbacks.
-///
-/// A convenience wrapper around [`update_workspace`] when the same callbacks
-/// instance can be cloned and shared across all repositories.
-///
-/// # Example
-///
-/// ```ignore
-/// use git_daily_rust::repo::{update_workspace_with, NoOpCallbacks};
-///
-/// let results = update_workspace_with(&repos, NoOpCallbacks);
-/// ```
 pub fn update_workspace_with<C>(repos: &[PathBuf], callbacks: C) -> Vec<UpdateResult>
 where
     C: UpdateCallbacks + Clone,
@@ -236,31 +180,25 @@ where
     operation().map_err(|e| UpdateError { source: e, step })
 }
 
+/// Attempts checkout to master, falls back to main if master doesn't exist.
 fn checkout_master_or_main_branch<F>(path: &Path, on_step: &F) -> Result<&'static str, UpdateError>
 where
     F: Fn(&UpdateStep),
 {
-    match run_step(
-        UpdateStep::CheckingOut {
-            branch: MASTER_BRANCH.to_string(),
-        },
-        on_step,
-        || git::checkout(path, MASTER_BRANCH),
-    ) {
+    match run_step(UpdateStep::CheckingOut, on_step, || {
+        git::checkout(path, MASTER_BRANCH)
+    }) {
         Ok(_) => Ok(MASTER_BRANCH),
         Err(_) => {
-            run_step(
-                UpdateStep::CheckingOut {
-                    branch: MAIN_BRANCH.to_string(),
-                },
-                on_step,
-                || git::checkout(path, MAIN_BRANCH),
-            )?;
+            run_step(UpdateStep::CheckingOut, on_step, || {
+                git::checkout(path, MAIN_BRANCH)
+            })?;
             Ok(MAIN_BRANCH)
         }
     }
 }
 
+/// Core update logic: stash, checkout main, fetch, restore branch, pop stash.
 fn do_update<F>(path: &Path, on_step: &F) -> Result<UpdateSuccess, UpdateError>
 where
     F: Fn(&UpdateStep),
@@ -278,16 +216,14 @@ where
     } else {
         false
     };
-    let master_or_main_branch = checkout_master_or_main_branch(path, on_step)?;
+
+    let master_branch = checkout_master_or_main_branch(path, on_step)?;
 
     run_step(UpdateStep::Fetching, on_step, || git::fetch_prune(path))?;
-    run_step(
-        UpdateStep::RestoringBranch {
-            branch: original_branch.clone(),
-        },
-        on_step,
-        || git::checkout(path, &original_branch),
-    )?;
+
+    run_step(UpdateStep::RestoringBranch, on_step, || {
+        git::checkout(path, &original_branch)
+    })?;
 
     if had_stash {
         run_step(UpdateStep::PoppingStash, on_step, || git::stash_pop(path))?;
@@ -295,7 +231,7 @@ where
 
     Ok(UpdateSuccess {
         original_branch,
-        master_branch: master_or_main_branch.to_string(),
+        master_branch: master_branch.to_string(),
         had_stash,
     })
 }

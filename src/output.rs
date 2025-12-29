@@ -1,9 +1,7 @@
 //! Progress bars, colored output, and summary formatting.
 //!
-//! This module provides the UI layer for git-daily, including:
-//! - Progress indicators for single and multi-repository updates
-//! - Colored terminal output for results
-//! - Summary formatting for completed operations
+//! This module provides visual feedback during repository updates including
+//! spinners, progress bars, and colored summary output.
 
 use crate::repo::{UpdateCallbacks, UpdateOutcome, UpdateResult, UpdateStep};
 use colored::Colorize;
@@ -15,7 +13,8 @@ use std::time::Duration;
 
 const MAX_VISIBLE_COMPLETIONS: usize = 5;
 
-/// Wrapper for single repository progress updates.
+/// Progress wrapper for single repository updates.
+/// Displays a spinner with step-by-step status messages.
 pub struct SingleRepoProgress {
     spinner: ProgressBar,
 }
@@ -44,7 +43,8 @@ impl SingleRepoProgress {
     }
 }
 
-/// Thread-safe wrapper for workspace progress tracking.
+/// Thread-safe progress tracker for workspace mode.
+/// Shows a progress bar with completion count and recent results.
 #[derive(Clone)]
 pub struct WorkspaceProgress {
     _multi: Arc<MultiProgress>,
@@ -119,10 +119,8 @@ impl WorkspaceProgress {
     }
 }
 
-/// A repository-specific progress tracker that can be moved into rayon workers.
-///
-/// Implements [`UpdateCallbacks`] for use with [`crate::repo::update_workspace`].
-/// This type is `Clone` and cheap to clone (uses `Arc` internally via `WorkspaceProgress`).
+/// Per-repository progress tracker for workspace mode.
+/// Implements `UpdateCallbacks` to receive completion notifications.
 #[derive(Clone)]
 pub struct RepoProgressTracker {
     repo_name: String,
@@ -130,18 +128,8 @@ pub struct RepoProgressTracker {
 }
 
 impl UpdateCallbacks for RepoProgressTracker {
-    /// No-op: Individual step progress is not displayed in workspace mode.
-    ///
-    /// In workspace mode, showing per-step updates for many parallel repositories
-    /// would create visual noise and interfere with the main progress bar.
-    /// Only completion status (success/failure) is tracked per repository.
-    ///
-    /// For single-repo mode, use [`SingleRepoProgress`] instead, which shows
-    /// detailed step-by-step progress.
     #[inline]
-    fn on_step(&self, _step: &UpdateStep) {
-        // Intentionally empty - see doc comment above
-    }
+    fn on_step(&self, _step: &UpdateStep) {}
 
     fn on_complete(&self, result: &UpdateResult) {
         let success = matches!(result.outcome, UpdateOutcome::Success(_));
@@ -298,16 +286,16 @@ fn print_failures(failures: &[&UpdateResult]) {
     println!();
 }
 
-fn format_step_message(step: &UpdateStep) -> String {
+fn format_step_message(step: &UpdateStep) -> &'static str {
     match step {
-        UpdateStep::Started => "Starting update...".to_string(),
-        UpdateStep::DetectingBranch => "Detecting current branch...".to_string(),
-        UpdateStep::CheckingChanges => "Checking for uncommitted changes...".to_string(),
-        UpdateStep::Stashing => "Stashing uncommitted changes...".to_string(),
-        UpdateStep::CheckingOut { branch } => format!("Checking out {}...", branch),
-        UpdateStep::Fetching => "Fetching from origin...".to_string(),
-        UpdateStep::RestoringBranch { branch } => format!("Restoring branch {}...", branch),
-        UpdateStep::PoppingStash => "Restoring stashed changes...".to_string(),
-        UpdateStep::Completed => "Completed".to_string(),
+        UpdateStep::Started => "Starting update...",
+        UpdateStep::DetectingBranch => "Detecting current branch...",
+        UpdateStep::CheckingChanges => "Checking for uncommitted changes...",
+        UpdateStep::Stashing => "Stashing uncommitted changes...",
+        UpdateStep::CheckingOut => "Checking out master branch...",
+        UpdateStep::Fetching => "Fetching from origin...",
+        UpdateStep::RestoringBranch => "Restoring original branch...",
+        UpdateStep::PoppingStash => "Restoring stashed changes...",
+        UpdateStep::Completed => "Completed",
     }
 }

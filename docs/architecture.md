@@ -98,40 +98,40 @@ pub trait UpdateCallbacks: Send + Sync {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoOpCallbacks;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdateStep {
     Started,
     DetectingBranch,
     CheckingChanges,
     Stashing,
-    CheckingOut { branch: String },
+    CheckingOut,
     Fetching,
-    RestoringBranch { branch: String },
+    RestoringBranch,
     PoppingStash,
     Completed,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct UpdateResult {
     pub path: PathBuf,
     pub outcome: UpdateOutcome,
     pub duration: Duration,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum UpdateOutcome {
     Success(UpdateSuccess),
     Failed(UpdateFailure),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct UpdateSuccess {
     pub original_branch: String,
     pub master_branch: String,
     pub had_stash: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct UpdateFailure {
     pub error: String,
     pub step: UpdateStep,

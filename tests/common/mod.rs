@@ -1,8 +1,13 @@
 //! Test infrastructure for git-daily-rust integration tests.
+//!
+//! Provides test fixtures and utilities for creating temporary git repositories.
 
 use anyhow::Result;
 use git_daily_rust::git::run_git;
+use git_daily_rust::repo::{UpdateCallbacks, UpdateResult, UpdateStep};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use tempfile::TempDir;
 
 /// A temporary git repository for testing.
@@ -12,42 +17,18 @@ pub struct TestRepo {
     path: PathBuf,
 }
 
-/// Initializes a git repository at the given path with an initial commit.
-///
-/// This is useful for workspace tests where you need to create multiple
-/// repositories in specific locations (not temp directories).
-///
-/// # Arguments
-///
-/// * `path` - Directory to initialize as a git repository (must exist)
-/// * `branch` - Name of the initial branch (e.g., "master" or "main")
-pub fn init_repo(path: &Path, branch: &str) -> Result<()> {
-    run_git(path, &["init", "-b", branch])?;
-
-    run_git(path, &["config", "user.email", "test@example.com"])?;
-    run_git(path, &["config", "user.name", "Test User"])?;
-
-    std::fs::write(path.join("README.md"), "# Test Repo\n")?;
-    run_git(path, &["add", "README.md"])?;
-    run_git(path, &["commit", "-m", "Initial commit"])?;
-
-    Ok(())
-}
-
 impl TestRepo {
     fn new_with_branch(branch: &str) -> Result<Self> {
         let temp_dir = TempDir::new()?;
         let path = temp_dir.path().to_path_buf();
-
         init_repo(&path, branch)?;
-
         Ok(Self {
             _temp_dir: temp_dir,
             path,
         })
     }
 
-    /// Creates a new test repository with an initial commit on the master branch.
+    /// Creates a new test repository with an initial commit on master.
     pub fn new() -> Result<Self> {
         Self::new_with_branch("master")
     }
@@ -102,4 +83,78 @@ impl TestRepo {
     pub fn file_exists(&self, name: &str) -> bool {
         self.path.join(name).exists()
     }
+}
+
+/// Callbacks that count invocations for testing.
+pub struct CountingCallbacks {
+    step_count: Arc<AtomicUsize>,
+    complete_count: Arc<AtomicUsize>,
+}
+
+impl CountingCallbacks {
+    pub fn new() -> (Self, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+        let step_count = Arc::new(AtomicUsize::new(0));
+        let complete_count = Arc::new(AtomicUsize::new(0));
+        (
+            Self {
+                step_count: Arc::clone(&step_count),
+                complete_count: Arc::clone(&complete_count),
+            },
+            step_count,
+            complete_count,
+        )
+    }
+}
+
+impl Clone for CountingCallbacks {
+    fn clone(&self) -> Self {
+        Self {
+            step_count: Arc::clone(&self.step_count),
+            complete_count: Arc::clone(&self.complete_count),
+        }
+    }
+}
+
+impl UpdateCallbacks for CountingCallbacks {
+    fn on_step(&self, _step: &UpdateStep) {
+        self.step_count.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn on_complete(&self, _result: &UpdateResult) {
+        self.complete_count.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+/// Initializes a git repository at the given path with an initial commit.
+pub fn init_repo(path: &Path, branch: &str) -> Result<()> {
+    run_git(path, &["init", "-b", branch])?;
+    run_git(path, &["config", "user.email", "test@example.com"])?;
+    run_git(path, &["config", "user.name", "Test User"])?;
+    std::fs::write(path.join("README.md"), "# Test Repo\n")?;
+    run_git(path, &["add", "README.md"])?;
+    run_git(path, &["commit", "-m", "Initial commit"])?;
+    Ok(())
+}
+
+/// Sets up a workspace with multiple repos and their remotes.
+pub fn setup_workspace_with_repos(
+    workspace: &TempDir,
+    repo_configs: &[(&str, &str)],
+) -> Result<()> {
+    for (name, branch) in repo_configs {
+        let repo_path = workspace.path().join(name);
+        let remote_path = workspace.path().join(format!("{}-remote", name));
+
+        std::fs::create_dir_all(&repo_path)?;
+        std::fs::create_dir_all(&remote_path)?;
+
+        init_repo(&repo_path, branch)?;
+        run_git(&remote_path, &["init", "--bare"])?;
+        run_git(
+            &repo_path,
+            &["remote", "add", "origin", remote_path.to_str().unwrap()],
+        )?;
+        run_git(&repo_path, &["push", "-u", "origin", branch])?;
+    }
+    Ok(())
 }

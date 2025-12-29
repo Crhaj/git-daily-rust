@@ -1,12 +1,13 @@
+//! CLI entry point for git-daily-v2.
+
 use git_daily_rust::repo::UpdateOutcome;
 use git_daily_rust::{output, repo};
 
 fn main() -> anyhow::Result<()> {
-    // Configure thread pool globally - high count is fine for I/O-bound git operations
-    rayon::ThreadPoolBuilder::new()
+    // High thread count is fine for I/O-bound git operations
+    let _ = rayon::ThreadPoolBuilder::new()
         .num_threads(100)
-        .build_global()
-        .ok();
+        .build_global();
 
     let start = std::time::Instant::now();
 
