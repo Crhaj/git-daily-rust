@@ -139,9 +139,9 @@ Build order: `git.rs` → `repo.rs` → `output.rs` → `main.rs`
 
 **Solution**: Change `stash()` to return `bool` indicating if a stash was actually created.
 
-- [ ] **9.5.1** `git.rs`: change `stash(repo) -> Result<bool>` - return false if "No local changes to save"
-- [ ] **9.5.2** `repo.rs`: use return value of `stash()` for `had_stash` instead of `is_dirty`
-- [ ] **9.5.3** Verify: test with repo containing only untracked files
+- [x] **9.5.1** `git.rs`: change `stash(repo) -> Result<bool>` - return false if "No local changes to save"
+- [x] **9.5.2** `repo.rs`: use return value of `stash()` for `had_stash` instead of `is_dirty`
+- [x] **9.5.3** Verify: test with repo containing only untracked files
 
 ---
 

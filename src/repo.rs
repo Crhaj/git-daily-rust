@@ -148,9 +148,11 @@ where
         git::has_uncommitted_changes(path)
     })?;
 
-    if is_dirty {
-        run_step(UpdateStep::Stashing, on_step, || git::stash(path))?;
-    }
+    let had_stash = if is_dirty {
+        run_step(UpdateStep::Stashing, on_step, || git::stash(path))?
+    } else {
+        false
+    };
     let master_or_main_branch = checkout_master_or_main_branch(path, on_step)?;
 
     run_step(UpdateStep::Fetching, on_step, || git::fetch_prune(path))?;
@@ -162,13 +164,13 @@ where
         || git::checkout(path, &original_branch),
     )?;
 
-    if is_dirty {
+    if had_stash {
         run_step(UpdateStep::PoppingStash, on_step, || git::stash_pop(path))?;
     }
 
     Ok(UpdateSuccess {
         original_branch,
         master_branch: master_or_main_branch.to_string(),
-        had_stash: is_dirty,
+        had_stash,
     })
 }

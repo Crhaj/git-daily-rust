@@ -30,8 +30,7 @@ fn validate_branch_name(branch: &str) -> anyhow::Result<()> {
 }
 
 pub fn get_current_branch(repo: &Path) -> anyhow::Result<String> {
-    run_git(repo, &["rev-parse", "--abbrev-ref", "HEAD"])
-        .context("Failed to get current branch")
+    run_git(repo, &["rev-parse", "--abbrev-ref", "HEAD"]).context("Failed to get current branch")
 }
 
 pub fn has_uncommitted_changes(repo: &Path) -> anyhow::Result<bool> {
@@ -40,9 +39,9 @@ pub fn has_uncommitted_changes(repo: &Path) -> anyhow::Result<bool> {
         .context("Failed to check for uncommitted changes")
 }
 
-pub fn stash(repo: &Path) -> anyhow::Result<()> {
-    run_git(repo, &["stash"]).context("Failed to stash changes")?;
-    Ok(())
+pub fn stash(repo: &Path) -> anyhow::Result<bool> {
+    let output = run_git(repo, &["stash"]).context("Failed to stash changes")?;
+    Ok(!output.contains("No local changes to save"))
 }
 
 pub fn stash_pop(repo: &Path) -> anyhow::Result<()> {
