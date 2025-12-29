@@ -34,12 +34,12 @@ Build order: `git.rs` → `repo.rs` → `output.rs` → `main.rs`
 ---
 
 ## Phase 2: Basic Output and Detection
-*Goal: Print working directory, detect if current dir is a git repo*
+*Goal: Print working directory, detect if the current dir is a git repo*
 
 - [x] **2.1** `output.rs`: implement `print_working_dir(path: &Path)`
 - [x] **2.2** `repo.rs`: implement `is_git_repo(path: &Path) -> bool`
 - [x] **2.3** `main.rs`: get cwd, print it, check if git repo, print result
-- [x] **2.4** Verify: run in a git repo vs non-git directory, see different output
+- [x] **2.4** Verify: run in a git repo vs. non-git directory, see different output
 
 ---
 
@@ -112,7 +112,7 @@ Build order: `git.rs` → `repo.rs` → `output.rs` → `main.rs`
 - [x] **8.2** `output.rs`: implement `update_progress(pb, step)`
 - [x] **8.3** `main.rs`: create progress bar, pass callback to `repo::update()`
 - [x] **8.4** `repo.rs`: ensure all steps call `on_step()` callback
-- [x] **8.5** Verify: see progress bar animate during single repo update
+- [x] **8.5** Verify: see progress bar animate during a single repo update
 
 ---
 
@@ -120,15 +120,15 @@ Build order: `git.rs` → `repo.rs` → `output.rs` → `main.rs`
 *Goal: Update multiple repos in parallel with overall progress*
 
 - [x] **9.1** `output.rs`: implement `create_workspace_progress(total) -> WorkspaceProgress`
-- [x] **9.2** `main.rs`: branch logic for single repo vs workspace mode
+- [x] **9.2** `main.rs`: branch logic for single repo vs. workspace mode
 - [x] **9.3** `main.rs`: implement workspace mode with `WorkspaceProgress`
 - [x] **9.4** `main.rs`: add rayon `.par_iter()` in workspace mode
-- [x] **9.5** `output.rs`: implement rolling window of last 5 completed repos with "..." indicator
-- [x] **9.6** Verify: run in workspace with 3+ repos, see parallel execution
+- [x] **9.5** `output.rs`: implement a rolling window of last 5 completed repos with "..." indicator
+- [x] **9.6** Verify: run in a workspace with 3+ repos, see parallel execution
 
 ---
 
-## Phase 9.5: Bug Fix - Stash with Untracked Files Only
+## Phase 9.5: Bug Fix – Stash with Untracked Files Only
 *Goal: Fix failure when repo has only untracked files*
 
 **Problem**: When a repo has only untracked files (no modified tracked files):
@@ -171,7 +171,7 @@ production code and the "who tests the tests?" problem.
 *Goal: Core behaviors verified with automated tests*
 
 - [ ] **11.1** Create `tests/integration_test.rs`
-- [ ] **11.2** Test: updates repo and returns to original branch
+- [ ] **11.2** Test: updates repo and returns to the original branch
 - [ ] **11.3** Test: stashes and restores uncommitted changes (modified tracked files)
 - [ ] **11.4** Test: handles untracked files only (no stash created, no pop attempted)
 - [ ] **11.5** Test: handles repo already on main
@@ -195,33 +195,33 @@ production code and the "who tests the tests?" problem.
 
 ## Milestone Summary
 
-| Phase | Milestone | You'll Know It Works When... |
-|-------|-----------|------------------------------|
-| 1 | Skeleton | `cargo build` succeeds |
-| 2-3 | Detection | Correctly identifies repos vs workspaces |
-| 4-6 | Core Logic | Single repo updates successfully |
-| 7-8 | UX | Colored output and progress bars work |
-| 9 | Parallelism | Multiple repos update simultaneously |
-| 9.5 | Bug Fix | Repos with only untracked files don't fail |
-| 10-11 | Tests | `cargo test` passes |
-| 12 | Polish | Ready for daily use |
+| Phase | Milestone   | You'll Know It Works When...               |
+|-------|-------------|--------------------------------------------|
+| 1     | Skeleton    | `cargo build` succeeds                     |
+| 2-3   | Detection   | Correctly identifies repos vs workspaces   |
+| 4-6   | Core Logic  | Single repo updates successfully           |
+| 7-8   | UX          | Colored output and progress bars work      |
+| 9     | Parallelism | Multiple repos update simultaneously       |
+| 9.5   | Bug Fix     | Repos with only untracked files don't fail |
+| 10-11 | Tests       | `cargo test` passes                        |
+| 12    | Polish      | Ready for daily use                        |
 
 ---
 
 ## Session Planning
 
-**First session goal:** Complete Phases 1-3
+**First session goal:** Complete Phases 1–3
 - Project compiles
 - Prints working directory
 - Detects git repos
 - Lists repos in a workspace
 
-Each subsequent session can tackle one phase.
+Each later session can tackle one phase.
 
 ---
 
 ## Testing Strategy
 
-- **Phases 1-9:** Build it, verify manually, get it working
-- **Phase 10-11:** Add tests to lock in the behavior
+- **Phases 1–9:** Build it, verify manually, get it working
+- **Phase 10–11:** Add tests to lock in the behavior
 - **Future bugs:** Write a failing test first, then fix

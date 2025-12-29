@@ -50,11 +50,11 @@ pub mod output;
 
 ### `main.rs`
 
-- Print working directory at start
+- Print a working directory at the start
 - Parse CLI args with clap (`-v` for verbose)
-- Detect if current directory is a git repo
-- If yes: run single repo update with step-by-step progress bar
-- If no: discover repos, update in parallel with repo-count progress bar
+- Detect if the current directory is a git repo
+- If yes: run a single repo update with a step-by-step progress bar
+- If no: discover repos, update in parallel with the repo-count progress bar
 - Call `output::print_summary()` at the end
 - Exit with code 1 if any failures
 
@@ -198,7 +198,7 @@ repo::update(&path, |_| {});
 9. Completed
 ```
 
-On failure: exit immediately, record failure with step and error info. No automatic state restoration is attempted - this avoids compounding errors and lets the user resolve issues (like stash pop conflicts) manually with full context.
+On failure: exit immediately, record failure with step and error info. No automatic state restoration is attempted – this avoids compounding errors and lets the user resolve issues (like stash pop conflicts) manually with full context.
 
 ## CLI Interface
 
@@ -278,33 +278,33 @@ impl TestRepo {
 
 ### Core Tests
 
-| Test | What it verifies |
-|------|------------------|
-| `updates_repo_and_returns_to_original_branch` | Happy path |
-| `stashes_and_restores_uncommitted_changes` | Stash/restore flow |
-| `falls_back_to_main_when_no_master` | Main branch detection |
-| `reports_failure_when_no_remote` | Error handling |
-| `handles_already_on_main_branch` | Edge case |
-| `reports_step_info_on_failure` | Error context includes failing step |
+| Test                                          | What it verifies                    |
+|-----------------------------------------------|-------------------------------------|
+| `updates_repo_and_returns_to_original_branch` | Happy path                          |
+| `stashes_and_restores_uncommitted_changes`    | Stash/restore flow                  |
+| `falls_back_to_main_when_no_master`           | Main branch detection               |
+| `reports_failure_when_no_remote`              | Error handling                      |
+| `handles_already_on_main_branch`              | Edge case                           |
+| `reports_step_info_on_failure`                | Error context includes failing step |
 
 ### What NOT to Test
 
 - `git.rs` in isolation (thin wrappers)
-- Output formatting (verify by eye)
+- Output formatting (verified by eye)
 - That dependencies work
 - 100% coverage
 
 ## Design Decisions
 
-| Decision | Choice | Rationale |
-|----------|--------|-----------|
-| Git interaction | Shell out to `git` binary | Matches user's git config, easier debugging |
-| Parallelism | `rayon` | Simple `.par_iter()`, not async overhead |
-| Progress callback | Closure, not trait | Simpler: `\|_\| {}` vs NoOpReporter |
-| Error handling | `anyhow` | CLI tool - good messages, not typed errors |
-| File structure | 5 source files | lib.rs needed for test access |
-| Types location | In `repo.rs` | <40 lines, tightly coupled to logic |
-| Testing | Integration with real git | No mocking complexity, catches real bugs |
+| Decision          | Choice                    | Rationale                                   |
+|-------------------|---------------------------|---------------------------------------------|
+| Git interaction   | Shell out to `git` binary | Matches user's git config, easier debugging |
+| Parallelism       | `rayon`                   | Simple `.par_iter()`, not async overhead    |
+| Progress callback | Closure, not trait        | Simpler: `\|_\| {}` vs NoOpReporter         |
+| Error handling    | `anyhow`                  | CLI tool - good messages, not typed errors  |
+| File structure    | 5 source files            | lib.rs needed for test access               |
+| Types location    | In `repo.rs`              | <40 lines, tightly coupled to logic         |
+| Testing           | Integration with real git | No mocking complexity, catches real bugs    |
 
 ## Future Extensions (Not Implemented Now)
 
