@@ -6,7 +6,14 @@
 use anyhow::Context;
 use std::path::Path;
 
-fn run_git(repo: &Path, args: &[&str]) -> anyhow::Result<String> {
+fn validate_branch_name(branch: &str) -> anyhow::Result<()> {
+    if branch.contains('\0') || branch.contains('\n') || branch.is_empty() {
+        anyhow::bail!("Invalid branch name: {:?}", branch);
+    }
+    Ok(())
+}
+
+pub fn run_git(repo: &Path, args: &[&str]) -> anyhow::Result<String> {
     let output = std::process::Command::new("git")
         .current_dir(repo)
         .args(args)
@@ -20,13 +27,6 @@ fn run_git(repo: &Path, args: &[&str]) -> anyhow::Result<String> {
         let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!("git {} failed: {}", args.join(" "), stderr)
     }
-}
-
-fn validate_branch_name(branch: &str) -> anyhow::Result<()> {
-    if branch.contains('\0') || branch.contains('\n') || branch.is_empty() {
-        anyhow::bail!("Invalid branch name: {:?}", branch);
-    }
-    Ok(())
 }
 
 pub fn get_current_branch(repo: &Path) -> anyhow::Result<String> {
