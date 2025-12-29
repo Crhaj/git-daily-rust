@@ -53,4 +53,33 @@ impl TestRepo {
     pub fn path(&self) -> &Path {
         &self.path
     }
+
+    /// Creates a new branch without checking it out.
+    pub fn create_branch(&self, name: &str) -> Result<()> {
+        run_git(&self.path, &["branch", name])?;
+        Ok(())
+    }
+
+    /// Creates a modified tracked file (uncommitted changes).
+    pub fn make_dirty(&self) -> Result<()> {
+        std::fs::write(self.path.join("README.md"), "# Modified\n")?;
+        Ok(())
+    }
+
+    /// Creates an untracked file.
+    pub fn make_untracked(&self) -> Result<()> {
+        std::fs::write(self.path.join("untracked.txt"), "untracked content\n")?;
+        Ok(())
+    }
+
+    /// Returns true if there's an active stash.
+    pub fn has_stash(&self) -> Result<bool> {
+        let output = run_git(&self.path, &["stash", "list"])?;
+        Ok(!output.is_empty())
+    }
+
+    /// Returns true if a file exists in the working directory.
+    pub fn file_exists(&self, name: &str) -> bool {
+        self.path.join(name).exists()
+    }
 }

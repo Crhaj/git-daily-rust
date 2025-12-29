@@ -151,15 +151,15 @@ Build order: `git.rs` → `repo.rs` → `output.rs` → `main.rs`
 **Design Principle**: Reuse production `git.rs` functions in tests. Only create test-specific
 helpers for environment setup and queries that don't exist in production.
 
-- [ ] **10.1** Create `tests/common/mod.rs`
-- [ ] **10.2** Implement `TestRepo::new()` - temp dir, git init, configure user, initial commit
-- [ ] **10.3** Implement `TestRepo::with_remote()` - bare repo as origin, push initial commit
-- [ ] **10.4** Implement `TestRepo::create_branch(name)` - creates branch without checkout
-- [ ] **10.5** Implement `TestRepo::make_dirty()` - creates uncommitted file
-- [ ] **10.6** Implement `TestRepo::make_untracked()` - creates untracked file (for 9.5 bug test)
-- [ ] **10.7** Implement `TestRepo::has_stash()` - test-specific query
-- [ ] **10.8** Implement `TestRepo::file_exists(name)` - convenience for verification
-- [ ] **10.9** Verify: write a trivial test that creates and uses TestRepo
+- [x] **10.1** Create `tests/common/mod.rs`
+- [x] **10.2** Implement `TestRepo::new()` - temp dir, git init, configure user, initial commit
+- [x] **10.3** Implement `TestRepo::with_remote()` - bare repo as origin, push initial commit
+- [x] **10.4** Implement `TestRepo::create_branch(name)` - creates branch without checkout
+- [x] **10.5** Implement `TestRepo::make_dirty()` - creates uncommitted file
+- [x] **10.6** Implement `TestRepo::make_untracked()` - creates untracked file (for 9.5 bug test)
+- [x] **10.7** Implement `TestRepo::has_stash()` - test-specific query
+- [x] **10.8** Implement `TestRepo::file_exists(name)` - convenience for verification
+- [x] **10.9** Verify: write tests that exercise all TestRepo helpers (7 tests passing)
 
 **Note**: Do NOT implement `current_branch()` or `checkout()` - tests should use
 `git::get_current_branch()` and `git::checkout()` directly to avoid duplicating
@@ -170,9 +170,9 @@ production code and the "who tests the tests?" problem.
 ## Phase 11: Integration Tests
 *Goal: Core behaviors verified with automated tests*
 
-- [x] **11.1** Create `tests/integration_test.rs`
-- [x] **11.2** Test: updates repo and returns to the original branch
-- [x] **11.3** Test: stashes and restores uncommitted changes (modified tracked files)
+- [ ] **11.1** Create `tests/integration_test.rs`
+- [ ] **11.2** Test: updates repo and returns to the original branch
+- [ ] **11.3** Test: stashes and restores uncommitted changes (modified tracked files)
 - [ ] **11.4** Test: handles untracked files only (no stash created, no pop attempted)
 - [ ] **11.5** Test: handles repo already on main
 - [ ] **11.6** Test: falls back to main when no master branch
