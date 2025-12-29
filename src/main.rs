@@ -1,21 +1,75 @@
 use git_daily_rust::repo::UpdateOutcome;
 use git_daily_rust::{output, repo};
+use rayon::prelude::*;
 
 fn main() -> anyhow::Result<()> {
+    /// Set parallelism globally at startup, this would not be a good practice for anything CPU intensive
+    /// It is ok for git-daily since it is mostly about fetching things from git
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(100)
+        .build_global()
+        .unwrap();
+
     let start = std::time::Instant::now();
 
     let cwd = std::env::current_dir()?;
     output::print_working_dir(&cwd);
 
     let results: Vec<_> = if repo::is_git_repo(&cwd) {
-        vec![repo::update(&cwd, |_| {})]
+        // Single repository mode - use spinner with step updates
+        let progress = output::create_single_repo_progress();
+        let result = repo::update(&cwd, |step| {
+            progress.update(&step);
+        });
+
+        match &result.outcome {
+            UpdateOutcome::Success(_) => {
+                let repo_name = cwd
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("repository");
+                progress.finish_success(repo_name);
+            }
+            UpdateOutcome::Failed(failure) => {
+                let repo_name = cwd
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("repository");
+                progress.finish_failed(repo_name, &failure.error);
+            }
+        }
+
+        vec![result]
     } else {
+        // Workspace mode - use progress bar with parallel execution
         let sub_dirs = repo::find_git_repos(&cwd);
         output::print_workspace_start(sub_dirs.len());
-        sub_dirs
-            .into_iter()
-            .map(|dir| repo::update(&dir, |_| {}))
-            .collect()
+
+        if sub_dirs.is_empty() {
+            vec![]
+        } else {
+            let workspace_progress = output::create_workspace_progress(sub_dirs.len());
+            let results: Vec<_> = sub_dirs
+                .par_iter()
+                .map(|dir| {
+                    let repo_name = dir
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+
+                    let tracker = workspace_progress.create_repo_tracker(repo_name);
+                    let result = repo::update(dir, tracker.step_callback());
+                    let success = matches!(result.outcome, UpdateOutcome::Success(_));
+                    tracker.mark_completed(success);
+
+                    result
+                })
+                .collect();
+
+            workspace_progress.finish();
+            results
+        }
     };
 
     output::print_summary(&results, start.elapsed());

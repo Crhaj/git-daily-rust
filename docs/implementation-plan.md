@@ -108,23 +108,23 @@ Build order: `git.rs` → `repo.rs` → `output.rs` → `main.rs`
 ## Phase 8: Progress Bars
 *Goal: Visual progress during updates*
 
-- [ ] **8.1** `output.rs`: implement `create_repo_progress() -> ProgressBar`
-- [ ] **8.2** `output.rs`: implement `update_progress(pb, step)`
-- [ ] **8.3** `main.rs`: create progress bar, pass callback to `repo::update()`
-- [ ] **8.4** `repo.rs`: ensure all steps call `on_step()` callback
-- [ ] **8.5** Verify: see progress bar animate during single repo update
+- [x] **8.1** `output.rs`: implement `create_repo_progress() -> ProgressBar`
+- [x] **8.2** `output.rs`: implement `update_progress(pb, step)`
+- [x] **8.3** `main.rs`: create progress bar, pass callback to `repo::update()`
+- [x] **8.4** `repo.rs`: ensure all steps call `on_step()` callback
+- [x] **8.5** Verify: see progress bar animate during single repo update
 
 ---
 
 ## Phase 9: Parallel Workspace Updates
 *Goal: Update multiple repos in parallel with overall progress*
 
-- [ ] **9.1** `output.rs`: implement `create_workspace_progress(total) -> ProgressBar`
-- [ ] **9.2** `main.rs`: extract `run_single_repo()` function
-- [ ] **9.3** `main.rs`: extract `run_workspace()` function
-- [ ] **9.4** `main.rs`: add rayon `.par_iter()` in workspace mode
-- [ ] **9.5** `main.rs`: add atomic counter for progress updates
-- [ ] **9.6** Verify: run in workspace with 3+ repos, see parallel execution
+- [x] **9.1** `output.rs`: implement `create_workspace_progress(total) -> WorkspaceProgress`
+- [x] **9.2** `main.rs`: branch logic for single repo vs workspace mode
+- [x] **9.3** `main.rs`: implement workspace mode with `WorkspaceProgress`
+- [x] **9.4** `main.rs`: add rayon `.par_iter()` in workspace mode
+- [x] **9.5** `output.rs`: implement rolling window of last 5 completed repos with "..." indicator
+- [x] **9.6** Verify: run in workspace with 3+ repos, see parallel execution
 
 ---
 
