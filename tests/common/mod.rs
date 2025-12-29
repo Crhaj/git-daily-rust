@@ -12,19 +12,34 @@ pub struct TestRepo {
     path: PathBuf,
 }
 
+/// Initializes a git repository at the given path with an initial commit.
+///
+/// This is useful for workspace tests where you need to create multiple
+/// repositories in specific locations (not temp directories).
+///
+/// # Arguments
+///
+/// * `path` - Directory to initialize as a git repository (must exist)
+/// * `branch` - Name of the initial branch (e.g., "master" or "main")
+pub fn init_repo(path: &Path, branch: &str) -> Result<()> {
+    run_git(path, &["init", "-b", branch])?;
+
+    run_git(path, &["config", "user.email", "test@example.com"])?;
+    run_git(path, &["config", "user.name", "Test User"])?;
+
+    std::fs::write(path.join("README.md"), "# Test Repo\n")?;
+    run_git(path, &["add", "README.md"])?;
+    run_git(path, &["commit", "-m", "Initial commit"])?;
+
+    Ok(())
+}
+
 impl TestRepo {
     fn new_with_branch(branch: &str) -> Result<Self> {
         let temp_dir = TempDir::new()?;
         let path = temp_dir.path().to_path_buf();
 
-        run_git(&path, &["init", "-b", branch])?;
-
-        run_git(&path, &["config", "user.email", "test@example.com"])?;
-        run_git(&path, &["config", "user.name", "Test User"])?;
-
-        std::fs::write(path.join("README.md"), "# Test Repo\n")?;
-        run_git(&path, &["add", "README.md"])?;
-        run_git(&path, &["commit", "-m", "Initial commit"])?;
+        init_repo(&path, branch)?;
 
         Ok(Self {
             _temp_dir: temp_dir,

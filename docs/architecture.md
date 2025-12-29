@@ -61,31 +61,44 @@ pub mod output;
 ### `output.rs`
 
 - `print_working_dir(path)` - prints "Working in: /path"
-- `create_repo_progress()` - progress bar for single repo (7 steps)
+- `create_single_repo_progress()` - progress bar for single repo
 - `create_workspace_progress(count)` - progress bar for workspace
-- `update_progress(pb, step)` - updates progress bar based on `UpdateStep`
 - `print_summary(results, duration)` - colored summary
-- `print_no_repos()` - yellow warning when no repos found
 - `print_workspace_start(count)` - "Found N repositories"
 
 ### `git.rs`
 
 - Thin wrappers around `git` binary via `std::process::Command`
-- Functions: `current_branch()`, `has_uncommitted_changes()`, `stash()`, `stash_pop()`, `checkout()`, `fetch_prune()`
+- Functions: `run_git()`, `get_current_branch()`, `has_uncommitted_changes()`, `stash()`, `stash_pop()`, `checkout()`, `fetch_prune()`
 - Returns `anyhow::Result`
 
 ### `repo.rs`
 
 - `is_git_repo(path) -> bool`
 - `update(path, on_step) -> UpdateResult` - orchestrates update with progress callback
+- `update_workspace(repos, make_callbacks) -> Vec<UpdateResult>` - parallel update with per-repo callbacks
+- `update_workspace_with(repos, callbacks) -> Vec<UpdateResult>` - parallel update with shared cloneable callbacks
 - Types: `UpdateResult`, `UpdateOutcome`, `UpdateStep`
+- Traits: `UpdateCallbacks` - trait for progress callbacks (zero-cost abstraction)
+- Helpers: `NoOpCallbacks` - default no-op implementation
 
 ## Core Types
 
 Defined in `repo.rs`:
 
 ```rust
-#[derive(Debug, Clone)]
+/// Progress callback trait - zero-cost abstraction for update notifications.
+/// Implement this to receive step-by-step progress and completion events.
+pub trait UpdateCallbacks: Send + Sync {
+    fn on_step(&self, step: &UpdateStep);
+    fn on_complete(&self, result: &UpdateResult);
+}
+
+/// Default no-op callbacks for when progress tracking is not needed.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoOpCallbacks;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UpdateStep {
     Started,
     DetectingBranch,
@@ -107,42 +120,63 @@ pub struct UpdateResult {
 
 #[derive(Debug)]
 pub enum UpdateOutcome {
-    Success {
-        original_branch: String,
-        main_branch: String,
-        had_stash: bool,
-    },
-    Failed {
-        error: String,
-        step: UpdateStep,
-    },
+    Success(UpdateSuccess),
+    Failed(UpdateFailure),
+}
+
+#[derive(Debug)]
+pub struct UpdateSuccess {
+    pub original_branch: String,
+    pub master_branch: String,
+    pub had_stash: bool,
+}
+
+#[derive(Debug)]
+pub struct UpdateFailure {
+    pub error: String,
+    pub step: UpdateStep,
 }
 ```
 
 ## Progress Callback Pattern
 
-Closure-based for simplicity:
+Two patterns are supported:
+
+### Single Repository (closure-based)
 
 ```rust
 pub fn update<F>(path: &Path, on_step: F) -> UpdateResult
 where
-    F: Fn(UpdateStep),
+    F: Fn(&UpdateStep),
 {
-    on_step(UpdateStep::DetectingBranch);
+    on_step(&UpdateStep::DetectingBranch);
     // ... work ...
 }
+
+// Usage with progress bar
+let progress = output::create_single_repo_progress();
+repo::update(&path, |step| progress.update(step));
 ```
 
-Usage:
+### Workspace Mode (trait-based, zero-cost abstraction)
 
 ```rust
-// Single repo - with progress bar
-let pb = output::create_repo_progress();
-repo::update(&path, |step| output::update_progress(&pb, &step));
+// With per-repo callbacks factory
+repo::update_workspace(&repos, |path| {
+    workspace_progress.create_repo_tracker(repo_name)
+});
 
-// Workspace mode - no per-step progress
-repo::update(&path, |_| {});
+// With shared cloneable callbacks
+repo::update_workspace_with(&repos, NoOpCallbacks);
+
+// With custom callbacks
+struct MyCallbacks { /* ... */ }
+impl UpdateCallbacks for MyCallbacks { /* ... */ }
+repo::update_workspace_with(&repos, MyCallbacks::new());
 ```
+
+The trait-based approach provides zero-cost abstraction through monomorphization
+when callbacks are inlined, avoiding heap allocations and dynamic dispatch.
 
 ## Execution Flow
 
@@ -190,9 +224,9 @@ repo::update(&path, |_| {});
 1. Started
 2. DetectingBranch -> get current branch
 3. CheckingChanges -> check for uncommitted changes
-4. Stashing -> git stash push (if needed)
+4. Stashing -> git stash (if needed)
 5. CheckingOut -> git checkout master (fallback to main)
-6. Fetching -> git fetch --prune --all
+6. Fetching -> git fetch --prune
 7. RestoringBranch -> git checkout original-branch
 8. PoppingStash -> git stash pop (if needed)
 9. Completed
@@ -231,7 +265,7 @@ Total: 1/1 repos in 1.2s
 ```
 Working in: /Users/jan/projects
 
-Found 12 repositories
+Starting in workspace mode with 12 repositories
 
 [================..............] 8/12 repos Completed: project-h
 
@@ -260,19 +294,22 @@ Integration tests with real git repos in temp directories. No mocking.
 ### Test Helper (`tests/common/mod.rs`)
 
 ```rust
+/// Initializes a git repo at a given path (for workspace tests)
+pub fn init_repo(path: &Path, branch: &str) -> Result<()> { ... }
+
 pub struct TestRepo {
     _temp: TempDir,
     pub path: PathBuf,
 }
 
 impl TestRepo {
-    pub fn new() -> Self { /* git init in temp dir */ }
-    pub fn with_remote() -> (Self, Self) { /* origin + clone */ }
-    pub fn current_branch(&self) -> String { ... }
-    pub fn create_branch(&self, name: &str) { ... }
-    pub fn checkout(&self, branch: &str) { ... }
-    pub fn make_dirty(&self) { ... }
-    pub fn has_stash(&self) -> bool { ... }
+    pub fn new() -> Result<Self> { /* git init in temp dir */ }
+    pub fn with_remote(branch: Option<&str>) -> Result<(Self, TempDir)> { /* origin + push */ }
+    pub fn create_branch(&self, name: &str) -> Result<()> { ... }
+    pub fn make_dirty(&self) -> Result<()> { ... }
+    pub fn make_untracked(&self) -> Result<()> { ... }
+    pub fn has_stash(&self) -> Result<bool> { ... }
+    pub fn file_exists(&self, name: &str) -> bool { ... }
 }
 ```
 
@@ -285,7 +322,15 @@ impl TestRepo {
 | `falls_back_to_main_when_no_master`           | Main branch detection               |
 | `reports_failure_when_no_remote`              | Error handling                      |
 | `handles_already_on_main_branch`              | Edge case                           |
-| `reports_step_info_on_failure`                | Error context includes failing step |
+| `update_workspace_updates_multiple_repos`     | Basic workspace mode                |
+| `workspace_mixed_success_and_failure`         | Partial failures in workspace       |
+| `workspace_with_dirty_repos`                  | Stash handling across repos         |
+| `workspace_callbacks_called_for_each_repo`    | Callback invocation correctness     |
+| `workspace_repos_on_different_branches`       | Branch restoration per repo         |
+| `workspace_empty_directory`                   | Empty workspace handling            |
+| `workspace_nested_repos_not_discovered`       | Only immediate subdirs scanned      |
+| `workspace_order_independence`                | Parallel execution consistency      |
+| `workspace_with_untracked_files_only`         | Untracked files don't cause stash   |
 
 ### What NOT to Test
 
@@ -300,7 +345,8 @@ impl TestRepo {
 |-------------------|---------------------------|---------------------------------------------|
 | Git interaction   | Shell out to `git` binary | Matches user's git config, easier debugging |
 | Parallelism       | `rayon`                   | Simple `.par_iter()`, not async overhead    |
-| Progress callback | Closure, not trait        | Simpler: `\|_\| {}` vs NoOpReporter         |
+| Single-repo callback | Closure-based          | Simpler for single use: `\|step\| { ... }`  |
+| Workspace callback | Trait-based (`UpdateCallbacks`) | Zero-cost abstraction, no heap alloc |
 | Error handling    | `anyhow`                  | CLI tool - good messages, not typed errors  |
 | File structure    | 5 source files            | lib.rs needed for test access               |
 | Types location    | In `repo.rs`              | <40 lines, tightly coupled to logic         |

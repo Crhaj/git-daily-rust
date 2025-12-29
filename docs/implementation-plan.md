@@ -178,6 +178,7 @@ production code and the "who tests the tests?" problem.
 - [x] **11.6** Test: falls back to main when no master branch
 - [x] **11.7** Test: reports failure when fetch fails (no remote)
 - [x] **11.8** Verify: `cargo test` passes
+- [x] **11.9** Test: workspace updates multiple repos via shared helper
 
 ---
 

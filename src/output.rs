@@ -5,7 +5,7 @@
 //! - Colored terminal output for results
 //! - Summary formatting for completed operations
 
-use crate::repo::{UpdateOutcome, UpdateResult, UpdateStep};
+use crate::repo::{UpdateCallbacks, UpdateOutcome, UpdateResult, UpdateStep};
 use colored::Colorize;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use std::collections::VecDeque;
@@ -120,17 +120,31 @@ impl WorkspaceProgress {
 }
 
 /// A repository-specific progress tracker that can be moved into rayon workers.
+///
+/// Implements [`UpdateCallbacks`] for use with [`crate::repo::update_workspace`].
+/// This type is `Clone` and cheap to clone (uses `Arc` internally via `WorkspaceProgress`).
+#[derive(Clone)]
 pub struct RepoProgressTracker {
     repo_name: String,
     workspace: WorkspaceProgress,
 }
 
-impl RepoProgressTracker {
-    pub fn step_callback(&self) -> impl Fn(&UpdateStep) + '_ {
-        move |_step: &UpdateStep| {}
+impl UpdateCallbacks for RepoProgressTracker {
+    /// No-op: Individual step progress is not displayed in workspace mode.
+    ///
+    /// In workspace mode, showing per-step updates for many parallel repositories
+    /// would create visual noise and interfere with the main progress bar.
+    /// Only completion status (success/failure) is tracked per repository.
+    ///
+    /// For single-repo mode, use [`SingleRepoProgress`] instead, which shows
+    /// detailed step-by-step progress.
+    #[inline]
+    fn on_step(&self, _step: &UpdateStep) {
+        // Intentionally empty - see doc comment above
     }
 
-    pub fn mark_completed(&self, success: bool) {
+    fn on_complete(&self, result: &UpdateResult) {
+        let success = matches!(result.outcome, UpdateOutcome::Success(_));
         self.workspace.mark_completed(&self.repo_name, success);
     }
 }

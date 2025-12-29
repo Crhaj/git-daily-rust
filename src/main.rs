@@ -1,6 +1,5 @@
 use git_daily_rust::repo::UpdateOutcome;
 use git_daily_rust::{output, repo};
-use rayon::prelude::*;
 
 fn main() -> anyhow::Result<()> {
     // Configure thread pool globally - high count is fine for I/O-bound git operations
@@ -48,23 +47,15 @@ fn main() -> anyhow::Result<()> {
             vec![]
         } else {
             let workspace_progress = output::create_workspace_progress(sub_dirs.len());
-            let results: Vec<_> = sub_dirs
-                .par_iter()
-                .map(|dir| {
-                    let repo_name = dir
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("unknown")
-                        .to_string();
+            let results = repo::update_workspace(&sub_dirs, |dir| {
+                let repo_name = dir
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("unknown")
+                    .to_string();
 
-                    let tracker = workspace_progress.create_repo_tracker(repo_name);
-                    let result = repo::update(dir, tracker.step_callback());
-                    let success = matches!(result.outcome, UpdateOutcome::Success(_));
-                    tracker.mark_completed(success);
-
-                    result
-                })
-                .collect();
+                workspace_progress.create_repo_tracker(repo_name)
+            });
 
             workspace_progress.finish();
             results
