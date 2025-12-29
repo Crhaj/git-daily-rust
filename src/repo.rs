@@ -36,15 +36,15 @@ struct UpdateError {
 
 #[derive(Debug)]
 pub struct UpdateSuccess {
-    original_branch: String,
-    master_branch: String,
-    had_stash: bool,
+    pub original_branch: String,
+    pub master_branch: String,
+    pub had_stash: bool,
 }
 
 #[derive(Debug)]
 pub struct UpdateFailure {
-    error: String,
-    step: UpdateStep,
+    pub error: String,
+    pub step: UpdateStep,
 }
 
 #[derive(Debug)]

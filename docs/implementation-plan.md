@@ -96,12 +96,12 @@ Build order: `git.rs` → `repo.rs` → `output.rs` → `main.rs`
 ## Phase 7: Summary Output
 *Goal: Show results with colors after update*
 
-- [ ] **7.1** `output.rs`: implement `print_summary(results, duration)`
-- [ ] **7.2** `output.rs`: implement `print_success(result)` helper
-- [ ] **7.3** `output.rs`: implement `print_failure(result)` helper
-- [ ] **7.4** `main.rs`: collect results, call `print_summary()`
-- [ ] **7.5** `main.rs`: exit with code 1 if any failures
-- [ ] **7.6** Verify: see green success output for working repo
+- [x] **7.1** `output.rs`: implement `print_summary(results, duration)`
+- [x] **7.2** `output.rs`: implement `print_successes(result)` helper
+- [x] **7.3** `output.rs`: implement `print_failures(result)` helper
+- [x] **7.4** `main.rs`: collect results, call `print_summary()`
+- [x] **7.5** `main.rs`: exit with code 1 if any failures
+- [x] **7.6** Verify: see green success output for working repo
 
 ---
 
