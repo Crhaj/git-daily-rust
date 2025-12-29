@@ -3,12 +3,11 @@ use git_daily_rust::{output, repo};
 use rayon::prelude::*;
 
 fn main() -> anyhow::Result<()> {
-    /// Set parallelism globally at startup, this would not be a good practice for anything CPU intensive
-    /// It is ok for git-daily since it is mostly about fetching things from git
+    // Configure thread pool globally - high count is fine for I/O-bound git operations
     rayon::ThreadPoolBuilder::new()
         .num_threads(100)
         .build_global()
-        .unwrap();
+        .ok();
 
     let start = std::time::Instant::now();
 
@@ -19,7 +18,7 @@ fn main() -> anyhow::Result<()> {
         // Single repository mode - use spinner with step updates
         let progress = output::create_single_repo_progress();
         let result = repo::update(&cwd, |step| {
-            progress.update(&step);
+            progress.update(step);
         });
 
         match &result.outcome {

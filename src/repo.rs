@@ -1,4 +1,7 @@
-// Repository detection, update logic, result types
+//! Repository detection, update logic, and result types.
+//!
+//! This module provides the core update functionality for git repositories,
+//! including detecting branches, stashing changes, and fetching updates.
 
 use crate::git;
 use std::path::{Path, PathBuf};
@@ -29,12 +32,6 @@ pub struct UpdateResult {
 }
 
 #[derive(Debug)]
-struct UpdateError {
-    source: anyhow::Error,
-    step: UpdateStep,
-}
-
-#[derive(Debug)]
 pub struct UpdateSuccess {
     pub original_branch: String,
     pub master_branch: String,
@@ -53,6 +50,12 @@ pub enum UpdateOutcome {
     Failed(UpdateFailure),
 }
 
+#[derive(Debug)]
+struct UpdateError {
+    source: anyhow::Error,
+    step: UpdateStep,
+}
+
 pub fn is_git_repo(path: &Path) -> bool {
     path.join(GIT_DIR).is_dir()
 }
@@ -67,21 +70,50 @@ pub fn find_git_repos(path: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+pub fn update<F>(path: &Path, on_step: F) -> UpdateResult
+where
+    F: Fn(&UpdateStep),
+{
+    on_step(&UpdateStep::Started);
+
+    let start = std::time::Instant::now();
+    let result = do_update(path, &on_step);
+    let duration = start.elapsed();
+
+    on_step(&UpdateStep::Completed);
+
+    match result {
+        Ok(success) => UpdateResult {
+            path: path.to_path_buf(),
+            outcome: UpdateOutcome::Success(success),
+            duration,
+        },
+        Err(error) => UpdateResult {
+            path: path.to_path_buf(),
+            outcome: UpdateOutcome::Failed(UpdateFailure {
+                error: error.source.to_string(),
+                step: error.step,
+            }),
+            duration,
+        },
+    }
+}
+
 fn run_step<T, F>(
     step: UpdateStep,
     on_progress: &F,
     operation: impl FnOnce() -> anyhow::Result<T>,
 ) -> Result<T, UpdateError>
 where
-    F: Fn(UpdateStep),
+    F: Fn(&UpdateStep),
 {
-    on_progress(step.clone());
+    on_progress(&step);
     operation().map_err(|e| UpdateError { source: e, step })
 }
 
 fn checkout_master_or_main_branch<F>(path: &Path, on_step: &F) -> Result<&'static str, UpdateError>
 where
-    F: Fn(UpdateStep),
+    F: Fn(&UpdateStep),
 {
     match run_step(
         UpdateStep::CheckingOut {
@@ -104,39 +136,9 @@ where
     }
 }
 
-pub fn update<F>(path: &Path, on_step: F) -> UpdateResult
-where
-    F: Fn(UpdateStep),
-{
-    on_step(UpdateStep::Started);
-
-    let start = std::time::Instant::now();
-    // main logic running in the do_update fn
-    let result = do_update(path, &on_step);
-    let duration = start.elapsed();
-
-    on_step(UpdateStep::Completed);
-
-    match result {
-        Ok(success) => UpdateResult {
-            path: path.to_path_buf(),
-            outcome: UpdateOutcome::Success(success),
-            duration,
-        },
-        Err(error) => UpdateResult {
-            path: path.to_path_buf(),
-            outcome: UpdateOutcome::Failed(UpdateFailure {
-                error: error.source.to_string(),
-                step: error.step,
-            }),
-            duration,
-        },
-    }
-}
-
 fn do_update<F>(path: &Path, on_step: &F) -> Result<UpdateSuccess, UpdateError>
 where
-    F: Fn(UpdateStep),
+    F: Fn(&UpdateStep),
 {
     let original_branch = run_step(UpdateStep::DetectingBranch, on_step, || {
         git::get_current_branch(path)
