@@ -14,6 +14,7 @@ use tempfile::TempDir;
 /// Automatically cleaned up when dropped.
 pub struct TestRepo {
     _temp_dir: TempDir,
+    _remote_dir: Option<TempDir>,
     path: PathBuf,
 }
 
@@ -24,6 +25,7 @@ impl TestRepo {
         init_repo(&path, branch)?;
         Ok(Self {
             _temp_dir: temp_dir,
+            _remote_dir: None,
             path,
         })
     }
@@ -34,21 +36,26 @@ impl TestRepo {
     }
 
     /// Creates a test repository with a configured remote.
-    /// Returns the repo and the remote TempDir (must be kept alive).
-    pub fn with_remote(branch: Option<&str>) -> Result<(Self, TempDir)> {
+    pub fn with_remote(branch: Option<&str>) -> Result<Self> {
         let branch = branch.unwrap_or("master");
         let remote_dir = TempDir::new()?;
         run_git(remote_dir.path(), &["init", "--bare"])?;
 
-        let local = Self::new_with_branch(branch)?;
+        let temp_dir = TempDir::new()?;
+        let path = temp_dir.path().to_path_buf();
+        init_repo(&path, branch)?;
 
         run_git(
-            &local.path,
+            &path,
             &["remote", "add", "origin", remote_dir.path().to_str().unwrap()],
         )?;
-        run_git(&local.path, &["push", "-u", "origin", branch])?;
+        run_git(&path, &["push", "-u", "origin", branch])?;
 
-        Ok((local, remote_dir))
+        Ok(Self {
+            _temp_dir: temp_dir,
+            _remote_dir: Some(remote_dir),
+            path,
+        })
     }
 
     pub fn path(&self) -> &Path {
@@ -82,6 +89,12 @@ impl TestRepo {
     /// Returns true if a file exists in the working directory.
     pub fn file_exists(&self, name: &str) -> bool {
         self.path.join(name).exists()
+    }
+
+    /// Removes the remote directory, simulating a broken remote.
+    /// Used for testing failure scenarios.
+    pub fn remove_remote(&mut self) {
+        self._remote_dir = None;
     }
 }
 

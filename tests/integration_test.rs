@@ -17,7 +17,7 @@ fn test_repo_creation() -> anyhow::Result<()> {
 
 #[test]
 fn test_repo_with_remote() -> anyhow::Result<()> {
-    let (repo, _remote) = TestRepo::with_remote(None)?;
+    let repo = TestRepo::with_remote(None)?;
     let branch = git::get_current_branch(repo.path())?;
     assert_eq!(branch, "master");
     git::fetch_prune(repo.path())?;
@@ -78,7 +78,7 @@ fn test_file_exists() -> anyhow::Result<()> {
 
 #[test]
 fn test_update_returns_to_original_branch() -> anyhow::Result<()> {
-    let (repo, _remote) = TestRepo::with_remote(None)?;
+    let repo = TestRepo::with_remote(None)?;
     repo.create_branch("feature")?;
     git::checkout(repo.path(), "feature")?;
 
@@ -92,7 +92,7 @@ fn test_update_returns_to_original_branch() -> anyhow::Result<()> {
 
 #[test]
 fn test_update_stashes_and_restores_uncommitted_changes() -> anyhow::Result<()> {
-    let (repo, _remote) = TestRepo::with_remote(None)?;
+    let repo = TestRepo::with_remote(None)?;
     repo.make_dirty()?;
     assert!(git::has_uncommitted_changes(repo.path())?);
 
@@ -106,7 +106,7 @@ fn test_update_stashes_and_restores_uncommitted_changes() -> anyhow::Result<()> 
 
 #[test]
 fn test_update_untracked_only_no_pop() -> anyhow::Result<()> {
-    let (repo, _remote) = TestRepo::with_remote(None)?;
+    let repo = TestRepo::with_remote(None)?;
     repo.make_untracked()?;
     assert!(!repo.has_stash()?);
     assert!(git::has_uncommitted_changes(repo.path())?);
@@ -121,7 +121,7 @@ fn test_update_untracked_only_no_pop() -> anyhow::Result<()> {
 
 #[test]
 fn test_update_handles_repo_already_on_main() -> anyhow::Result<()> {
-    let (repo, _remote) = TestRepo::with_remote(Some("main"))?;
+    let repo = TestRepo::with_remote(Some("main"))?;
     let branch = git::get_current_branch(repo.path())?;
     assert_eq!(branch, "main");
 
@@ -135,7 +135,7 @@ fn test_update_handles_repo_already_on_main() -> anyhow::Result<()> {
 
 #[test]
 fn test_update_falls_back_to_main_when_no_master_branch() -> anyhow::Result<()> {
-    let (repo, _remote) = TestRepo::with_remote(Some("main"))?;
+    let repo = TestRepo::with_remote(Some("main"))?;
     repo.create_branch("feature")?;
     git::checkout(repo.path(), "feature")?;
 
@@ -156,8 +156,8 @@ fn test_update_falls_back_to_main_when_no_master_branch() -> anyhow::Result<()> 
 
 #[test]
 fn test_update_reports_failure_when_fetch_fails_without_remote() -> anyhow::Result<()> {
-    let (repo, remote) = TestRepo::with_remote(None)?;
-    drop(remote);
+    let mut repo = TestRepo::with_remote(None)?;
+    repo.remove_remote();
 
     let result = repo::update(repo.path(), |_| {});
 
