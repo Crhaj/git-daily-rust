@@ -56,9 +56,9 @@ pub struct WorkspaceProgress {
 }
 
 impl WorkspaceProgress {
-    pub fn create_repo_tracker(&self, repo_name: String) -> RepoProgressTracker {
+    pub fn create_repo_tracker(&self, repo_name: &str) -> RepoProgressTracker {
         RepoProgressTracker {
-            repo_name,
+            repo_name: repo_name.to_string(),
             workspace: self.clone(),
         }
     }

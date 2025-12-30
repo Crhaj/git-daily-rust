@@ -2,6 +2,7 @@
 
 use git_daily_rust::repo::UpdateOutcome;
 use git_daily_rust::{output, repo};
+use std::path::Path;
 
 fn main() -> anyhow::Result<()> {
     // High thread count is fine for I/O-bound git operations
@@ -20,21 +21,12 @@ fn main() -> anyhow::Result<()> {
         let result = repo::update(&cwd, |step| {
             progress.update(step);
         });
-
         match &result.outcome {
             UpdateOutcome::Success(_) => {
-                let repo_name = cwd
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("repository");
-                progress.finish_success(repo_name);
+                progress.finish_success(get_repo_name(&cwd));
             }
             UpdateOutcome::Failed(failure) => {
-                let repo_name = cwd
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("repository");
-                progress.finish_failed(repo_name, &failure.error);
+                progress.finish_failed(get_repo_name(&cwd), &failure.error);
             }
         }
 
@@ -49,13 +41,7 @@ fn main() -> anyhow::Result<()> {
         } else {
             let workspace_progress = output::create_workspace_progress(sub_dirs.len());
             let results = repo::update_workspace(&sub_dirs, |dir| {
-                let repo_name = dir
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("unknown")
-                    .to_string();
-
-                workspace_progress.create_repo_tracker(repo_name)
+                workspace_progress.create_repo_tracker(get_repo_name(dir))
             });
 
             workspace_progress.finish();
@@ -73,4 +59,10 @@ fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn get_repo_name(path: &Path) -> &str {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("repository")
 }
