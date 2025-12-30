@@ -73,25 +73,8 @@ pub struct UpdateFailure {
 pub struct NoOpCallbacks;
 
 impl UpdateCallbacks for NoOpCallbacks {
-    #[inline]
     fn on_step(&self, _step: &UpdateStep) {}
-
-    #[inline]
     fn on_complete(&self, _result: &UpdateResult) {}
-}
-
-/// Blanket implementation allowing tuple of closures as callbacks.
-impl<F1, F2> UpdateCallbacks for (F1, F2)
-where
-    F1: Fn(&UpdateStep) + Send + Sync,
-    F2: Fn(&UpdateResult) + Send + Sync,
-{
-    fn on_step(&self, step: &UpdateStep) {
-        (self.0)(step);
-    }
-    fn on_complete(&self, result: &UpdateResult) {
-        (self.1)(result);
-    }
 }
 
 struct UpdateError {
@@ -158,14 +141,6 @@ where
             result
         })
         .collect()
-}
-
-/// Updates multiple repositories in parallel with shared callbacks.
-pub fn update_workspace_with<C>(repos: &[PathBuf], callbacks: C) -> Vec<UpdateResult>
-where
-    C: UpdateCallbacks + Clone,
-{
-    update_workspace(repos, |_| callbacks.clone())
 }
 
 fn run_step<T, F>(

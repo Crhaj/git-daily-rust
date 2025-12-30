@@ -281,7 +281,7 @@ fn test_workspace_callbacks_called_for_each_repo() -> anyhow::Result<()> {
     assert_eq!(repos.len(), 3);
 
     let (callbacks, step_count, complete_count) = CountingCallbacks::new();
-    let results = repo::update_workspace_with(&repos, callbacks);
+    let results = repo::update_workspace(&repos, |_| callbacks.clone());
 
     assert_eq!(results.len(), 3);
     assert_eq!(complete_count.load(Ordering::SeqCst), 3);

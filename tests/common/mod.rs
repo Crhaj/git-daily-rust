@@ -86,6 +86,7 @@ impl TestRepo {
 }
 
 /// Callbacks that count invocations for testing.
+#[derive(Clone)]
 pub struct CountingCallbacks {
     step_count: Arc<AtomicUsize>,
     complete_count: Arc<AtomicUsize>,
@@ -103,15 +104,6 @@ impl CountingCallbacks {
             step_count,
             complete_count,
         )
-    }
-}
-
-impl Clone for CountingCallbacks {
-    fn clone(&self) -> Self {
-        Self {
-            step_count: Arc::clone(&self.step_count),
-            complete_count: Arc::clone(&self.complete_count),
-        }
     }
 }
 

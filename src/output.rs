@@ -128,7 +128,6 @@ pub struct RepoProgressTracker {
 }
 
 impl UpdateCallbacks for RepoProgressTracker {
-    #[inline]
     fn on_step(&self, _step: &UpdateStep) {}
 
     fn on_complete(&self, result: &UpdateResult) {

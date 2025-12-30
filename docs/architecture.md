@@ -77,7 +77,6 @@ pub mod output;
 - `is_git_repo(path) -> bool`
 - `update(path, on_step) -> UpdateResult` - orchestrates update with progress callback
 - `update_workspace(repos, make_callbacks) -> Vec<UpdateResult>` - parallel update with per-repo callbacks
-- `update_workspace_with(repos, callbacks) -> Vec<UpdateResult>` - parallel update with shared cloneable callbacks
 - Types: `UpdateResult`, `UpdateOutcome`, `UpdateStep`
 - Traits: `UpdateCallbacks` - trait for progress callbacks (zero-cost abstraction)
 - Helpers: `NoOpCallbacks` - default no-op implementation
@@ -166,13 +165,12 @@ repo::update_workspace(&repos, |path| {
     workspace_progress.create_repo_tracker(repo_name)
 });
 
-// With shared cloneable callbacks
-repo::update_workspace_with(&repos, NoOpCallbacks);
+// With no-op callbacks
+repo::update_workspace(&repos, |_| NoOpCallbacks);
 
-// With custom callbacks
-struct MyCallbacks { /* ... */ }
-impl UpdateCallbacks for MyCallbacks { /* ... */ }
-repo::update_workspace_with(&repos, MyCallbacks::new());
+// With shared cloneable callbacks
+let callbacks = MyCallbacks::new();
+repo::update_workspace(&repos, |_| callbacks.clone());
 ```
 
 The trait-based approach provides zero-cost abstraction through monomorphization
