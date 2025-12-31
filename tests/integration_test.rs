@@ -172,6 +172,25 @@ fn test_update_reports_failure_when_fetch_fails_without_remote() -> anyhow::Resu
 }
 
 #[test]
+fn test_update_is_idempotent() -> anyhow::Result<()> {
+    let repo = TestRepo::with_remote(None)?;
+    repo.create_branch("feature")?;
+    git::checkout(repo.path(), "feature")?;
+
+    // First update
+    let result1 = repo::update(repo.path(), |_| {});
+    assert!(matches!(result1.outcome, UpdateOutcome::Success(_)));
+
+    // Second update should also succeed
+    let result2 = repo::update(repo.path(), |_| {});
+    assert!(matches!(result2.outcome, UpdateOutcome::Success(_)));
+
+    // Should still be on feature branch
+    assert_eq!(git::get_current_branch(repo.path())?, "feature");
+    Ok(())
+}
+
+#[test]
 fn test_update_workspace_updates_multiple_repos() -> anyhow::Result<()> {
     let workspace = TempDir::new()?;
     setup_workspace_with_repos(&workspace, &[("repo-a", "master"), ("repo-b", "master")])?;

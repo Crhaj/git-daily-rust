@@ -69,7 +69,7 @@ pub mod output;
 ### `git.rs`
 
 - Thin wrappers around `git` binary via `std::process::Command`
-- Functions: `run_git()`, `get_current_branch()`, `has_uncommitted_changes()`, `stash()`, `stash_pop()`, `checkout()`, `fetch_prune()`
+- Functions: `run_git()`, `get_current_branch()`, `has_uncommitted_changes()`, `fetch_prune()`, `stash()`, `stash_pop()`, `checkout()`, `pull()`
 - Returns `anyhow::Result`
 
 ### `repo.rs`
@@ -102,9 +102,10 @@ pub enum UpdateStep {
     Started,
     DetectingBranch,
     CheckingChanges,
+    Fetching,
     Stashing,
     CheckingOut,
-    Fetching,
+    Pulling,
     RestoringBranch,
     PoppingStash,
     Completed,
@@ -222,13 +223,18 @@ when callbacks are inlined, avoiding heap allocations and dynamic dispatch.
 1. Started
 2. DetectingBranch -> get current branch
 3. CheckingChanges -> check for uncommitted changes
-4. Stashing -> git stash (if needed)
-5. CheckingOut -> git checkout master (fallback to main)
-6. Fetching -> git fetch --prune
-7. RestoringBranch -> git checkout original-branch
-8. PoppingStash -> git stash pop (if needed)
-9. Completed
+4. Fetching -> git fetch --prune (updates all remote refs)
+5. Stashing -> git stash (if needed)
+6. CheckingOut -> git checkout master (fallback to main)
+7. Pulling -> git pull --ff-only origin master (fast-forward only)
+8. RestoringBranch -> git checkout original-branch
+9. PoppingStash -> git stash pop (if needed)
+10. Completed
 ```
+
+**Why fetch before stash?** Updates remote tracking branches before modifying working directory state.
+
+**Why pull with --ff-only?** Prevents accidental merge commits during automated updates. If master has diverged from remote, the operation fails explicitly and user must resolve manually.
 
 On failure: exit immediately, record failure with step and error info. No automatic state restoration is attempted – this avoids compounding errors and lets the user resolve issues (like stash pop conflicts) manually with full context.
 

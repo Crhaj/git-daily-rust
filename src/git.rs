@@ -31,6 +31,11 @@ pub fn has_uncommitted_changes(repo: &Path) -> anyhow::Result<bool> {
         .context("Failed to check for uncommitted changes")
 }
 
+pub fn fetch_prune(repo: &Path) -> anyhow::Result<()> {
+    run_git(repo, &["fetch", "--prune"]).context("Failed to fetch from remote")?;
+    Ok(())
+}
+
 pub fn stash(repo: &Path) -> anyhow::Result<bool> {
     let output = run_git(repo, &["stash"]).context("Failed to stash changes")?;
     Ok(!output.contains("No local changes to save"))
@@ -48,8 +53,10 @@ pub fn checkout(repo: &Path, branch: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn fetch_prune(repo: &Path) -> anyhow::Result<()> {
-    run_git(repo, &["fetch", "--prune"]).context("Failed to fetch from remote")?;
+pub fn pull(repo: &Path, branch: &str) -> anyhow::Result<()> {
+    validate_branch_name(branch)?;
+    run_git(repo, &["pull", "--ff-only", "origin", branch])
+        .with_context(|| format!("Failed to pull '{}' from origin", branch))?;
     Ok(())
 }
 

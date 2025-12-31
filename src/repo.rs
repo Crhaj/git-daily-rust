@@ -30,9 +30,10 @@ pub enum UpdateStep {
     Started,
     DetectingBranch,
     CheckingChanges,
+    Fetching,
     Stashing,
     CheckingOut,
-    Fetching,
+    Pulling,
     RestoringBranch,
     PoppingStash,
     Completed,
@@ -155,7 +156,7 @@ where
     operation().map_err(|e| UpdateError { source: e, step })
 }
 
-/// Attempts check out to master falls back to main if master doesn't exist.
+/// Attempts check out to master fall back to main if master doesn't exist.
 fn checkout_master_or_main_branch<F>(path: &Path, on_step: &F) -> Result<&'static str, UpdateError>
 where
     F: Fn(&UpdateStep),
@@ -186,6 +187,8 @@ where
         git::has_uncommitted_changes(path)
     })?;
 
+    run_step(UpdateStep::Fetching, on_step, || git::fetch_prune(path))?;
+
     let had_stash = if is_dirty {
         run_step(UpdateStep::Stashing, on_step, || git::stash(path))?
     } else {
@@ -194,7 +197,9 @@ where
 
     let master_branch = checkout_master_or_main_branch(path, on_step)?;
 
-    run_step(UpdateStep::Fetching, on_step, || git::fetch_prune(path))?;
+    run_step(UpdateStep::Pulling, on_step, || {
+        git::pull(path, master_branch)
+    })?;
 
     run_step(UpdateStep::RestoringBranch, on_step, || {
         git::checkout(path, &original_branch)
