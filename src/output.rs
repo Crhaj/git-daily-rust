@@ -44,7 +44,7 @@ impl SingleRepoProgress {
 }
 
 /// Thread-safe progress tracker for workspace mode.
-/// Shows a progress bar with completion count and recent results.
+/// Shows a progress bar with the completion count and recent results.
 #[derive(Clone)]
 pub struct WorkspaceProgress {
     _multi: Arc<MultiProgress>,
