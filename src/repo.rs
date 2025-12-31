@@ -155,7 +155,7 @@ where
     operation().map_err(|e| UpdateError { source: e, step })
 }
 
-/// Attempts checkout to master falls back to main if master doesn't exist.
+/// Attempts check out to master falls back to main if master doesn't exist.
 fn checkout_master_or_main_branch<F>(path: &Path, on_step: &F) -> Result<&'static str, UpdateError>
 where
     F: Fn(&UpdateStep),
