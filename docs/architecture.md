@@ -2,16 +2,20 @@
 
 ## Purpose
 
-A CLI tool that updates git repositories by stashing changes, switching to the main branch, fetching with prune, and restoring the original state. When run in a non-git directory, it performs this operation on all git repositories in subdirectories (in parallel).
+A CLI tool that updates git repositories by stashing changes, switching to the main branch, fetching with prune, and
+restoring the original state. When run in a non-git directory, it performs this operation on all git repositories in
+subdirectories (in parallel).
 
 ## Project Structure
 
 ```
 src/
-├── main.rs      # Entry point, imports from lib, orchestration
+├── main.rs      # Entry point, CLI parsing, orchestration
 ├── lib.rs       # Exports modules for binary and tests
+├── config.rs    # Config struct and Verbosity enum
+├── constants.rs # Application-wide constants (timeouts, thread counts)
 ├── output.rs    # Progress bars, colored output, summary formatting
-├── git.rs       # Thin wrappers around git binary commands
+├── git.rs       # Thin wrappers around git binary commands (with timeout)
 └── repo.rs      # Repository detection, update logic, result types
 
 tests/
@@ -20,7 +24,7 @@ tests/
 └── integration_test.rs  # Integration tests
 ```
 
-**5 source files + test infrastructure.**
+**7 source files + test infrastructure.**
 
 ## Dependencies
 
@@ -40,12 +44,57 @@ tempfile = "3"         # Temp directories for tests
 
 ### `lib.rs`
 
-Exports modules for use by `main.rs` and integration tests:
+Exports modules for use by `main.rs` and integration tests. Includes usage examples:
 
 ```rust
+pub mod config;
+pub mod constants;
 pub mod git;
-pub mod repo;
 pub mod output;
+pub mod repo;
+```
+
+### `constants.rs`
+
+Centralized application-wide constants to avoid magic numbers:
+
+```rust
+pub fn git_timeout() -> Duration;  // Configurable via GIT_DAILY_TIMEOUT env var (default: 30s)
+pub const RAYON_THREAD_COUNT: usize = 60;
+pub const PROGRESS_TICK_MS: u64 = 80;
+pub const MAX_VISIBLE_COMPLETIONS: usize = 5;
+pub const MASTER_BRANCH: &str = "master";
+pub const MAIN_BRANCH: &str = "main";
+pub const GIT_DIR: &str = ".git";
+pub const DEFAULT_REPO_NAME: &str = "repository";
+```
+
+The git timeout can be customized via environment variable:
+
+```bash
+GIT_DAILY_TIMEOUT=60 git-daily-v2  # 60 second timeout
+```
+
+### `config.rs`
+
+Runtime configuration derived from CLI arguments:
+
+```rust
+pub struct Config {
+    pub verbosity: Verbosity,
+}
+
+impl Config {
+    pub fn is_quiet(&self) -> bool;
+    pub fn is_verbose(&self) -> bool;
+    pub fn git_logger(&self) -> GitLogger;  // Returns verbose or no-op logger
+}
+
+pub enum Verbosity {
+    Quiet,   // -q: Minimal output, errors only
+    Normal,  // Default: Progress bars and summary
+    Verbose, // -v: Show git commands, sequential in workspace
+}
 ```
 
 ### `main.rs`
@@ -60,43 +109,77 @@ pub mod output;
 
 ### `output.rs`
 
-- `print_working_dir(path)` - prints "Working in: /path"
+Presentation layer with progress bars, colored output, and callbacks:
+
+- `NoOpCallbacks` - null object pattern for when no output is needed
+- `SingleRepoCallbacks` - combines progress bar + verbose output for single repo
+- `RepoProgressTracker` - per-repo tracker for workspace mode
 - `create_single_repo_progress()` - progress bar for single repo
 - `create_workspace_progress(count)` - progress bar for workspace
+- `print_working_dir(path)` - prints "Working in: /path"
 - `print_summary(results, duration)` - colored summary
 - `print_workspace_start(count)` - "Found N repositories"
+
+Includes unit tests for formatting functions.
 
 ### `git.rs`
 
 - Thin wrappers around `git` binary via `std::process::Command`
-- Functions: `run_git()`, `get_current_branch()`, `has_uncommitted_changes()`, `fetch_prune()`, `stash()`, `stash_pop()`, `checkout()`, `pull()`
+- **Configurable timeout** on all git operations (default 30s, via `GIT_DAILY_TIMEOUT` env var)
+- **Callback-based logging** to decouple from presentation layer
+- **Branch name validation** to prevent command injection attacks
+- Functions: `run_git()`, `run_git_with_logger()`, `get_current_branch()`, `get_current_commit()`,
+  `has_uncommitted_changes()`, `fetch_prune()`, `stash()`, `stash_pop()`, `checkout()`, `pull()`
+- All functions accept a `GitLogger` callback for verbose output
 - Returns `anyhow::Result`
+
+```rust
+/// Callback for logging git commands and their output.
+pub type GitLogger = fn(&Config, &[&str], Option<&str>);
+
+/// Default no-op logger for non-verbose modes.
+pub fn no_op_logger(_config: &Config, _args: &[&str], _output: Option<&str>) {}
+
+/// Verbose logger that prints git commands and output.
+pub fn verbose_logger(config: &Config, args: &[&str], output: Option<&str>) { ... }
+```
+
+Includes unit tests for branch name validation (shell metacharacters, argument injection, unicode).
 
 ### `repo.rs`
 
+Domain layer with core update logic and types:
+
 - `is_git_repo(path) -> bool`
-- `update(path, on_step) -> UpdateResult` - orchestrates update with progress callback
-- `update_workspace(repos, make_callbacks) -> Vec<UpdateResult>` - parallel update with per-repo callbacks
-- Types: `UpdateResult`, `UpdateOutcome`, `UpdateStep`
+- `find_git_repos(path) -> Vec<PathBuf>` - discovers git repos in subdirectories
+- `update(path, callbacks, config) -> UpdateResult` - orchestrates update with callbacks
+- `update_workspace(repos, make_callbacks, config) -> Vec<UpdateResult>` - parallel update
+- Types: `UpdateResult`, `UpdateOutcome`, `UpdateStep`, `OriginalHead`, `UpdateSuccess`, `UpdateFailure`
 - Traits: `UpdateCallbacks` - trait for progress callbacks (zero-cost abstraction)
-- Helpers: `NoOpCallbacks` - default no-op implementation
+
+Note: `NoOpCallbacks` is in `output.rs` (presentation layer), not here.
 
 ## Core Types
 
 Defined in `repo.rs`:
 
 ```rust
-/// Progress callback trait - zero-cost abstraction for update notifications.
-/// Implement this to receive step-by-step progress and completion events.
+/// Callbacks for monitoring repository update progress and output.
+/// Decouples domain logic from presentation concerns.
+///
+/// Required methods: on_step(), on_complete()
+/// Optional methods: on_update_start(), on_step_execute(), on_completion_status()
 pub trait UpdateCallbacks: Send + Sync {
-    fn on_step(&self, step: &UpdateStep);
-    fn on_complete(&self, result: &UpdateResult);
+    fn on_update_start(&self, repo_name: &str) {}     // Called when update begins (optional)
+    fn on_step(&self, step: &UpdateStep);              // Progress tracking (required)
+    fn on_step_execute(&self, step: &UpdateStep) {}    // Verbose output (optional)
+    fn on_complete(&self, result: &UpdateResult);      // Update finished (required)
+    fn on_completion_status(&self, success: bool, error: Option<&str>) {} // (optional)
 }
 
-/// Default no-op callbacks for when progress tracking is not needed.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NoOpCallbacks;
+// NoOpCallbacks is in output.rs (null object pattern for presentation)
 
+#[non_exhaustive]  // New variants may be added in future versions
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdateStep {
     Started,
@@ -109,6 +192,19 @@ pub enum UpdateStep {
     RestoringBranch,
     PoppingStash,
     Completed,
+}
+
+/// The original state of HEAD before an update operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OriginalHead {
+    Branch(String),      // HEAD was on a named branch
+    DetachedAt(String),  // HEAD was detached at a commit SHA
+}
+
+impl OriginalHead {
+    pub fn git_ref(&self) -> &str;      // Returns branch name or SHA for checkout
+    pub fn is_detached(&self) -> bool;  // True if DetachedAt
+    pub fn display(&self) -> String;    // "[branch]" or "[abc1234...detached]"
 }
 
 #[derive(Debug, Clone)]
@@ -126,8 +222,8 @@ pub enum UpdateOutcome {
 
 #[derive(Debug, Clone)]
 pub struct UpdateSuccess {
-    pub original_branch: String,
-    pub master_branch: String,
+    pub original_head: OriginalHead,   // Type-safe HEAD state
+    pub master_branch: &'static str,   // "master" or "main"
     pub had_stash: bool,
 }
 
@@ -136,46 +232,68 @@ pub struct UpdateFailure {
     pub error: String,
     pub step: UpdateStep,
 }
+
+impl Display for UpdateFailure { ... }  // "failed at CheckingOut: error message"
 ```
 
-## Progress Callback Pattern
+## Callback Pattern
 
-Two patterns are supported:
+Both single-repo and workspace modes use the unified `UpdateCallbacks` trait:
 
-### Single Repository (closure-based)
+### Single Repository
 
 ```rust
-pub fn update<F>(path: &Path, on_step: F) -> UpdateResult
+pub fn update<C>(path: &Path, callbacks: &C, config: &Config) -> UpdateResult
 where
-    F: Fn(&UpdateStep),
-{
-    on_step(&UpdateStep::DetectingBranch);
-    // ... work ...
-}
+    C: UpdateCallbacks,
 
-// Usage with progress bar
-let progress = output::create_single_repo_progress();
-repo::update(&path, |step| progress.update(step));
+// Usage with SingleRepoCallbacks (combines progress + verbose output)
+let progress = output::create_single_repo_progress( & config);
+let callbacks = output::SingleRepoCallbacks::new(progress, & config);
+let result = repo::update(path, & callbacks, & config);
+callbacks.finish( & result);
 ```
 
-### Workspace Mode (trait-based, zero-cost abstraction)
+### Workspace Mode
 
 ```rust
 // With per-repo callbacks factory
-repo::update_workspace(&repos, |path| {
-    workspace_progress.create_repo_tracker(repo_name)
-});
+let workspace_progress = output::create_workspace_progress(repos.len(), & config);
+repo::update_workspace( & repos, | path| {
+workspace_progress.create_repo_tracker(repo_name, & config)
+}, & config);
 
-// With no-op callbacks
-repo::update_workspace(&repos, |_| NoOpCallbacks);
-
-// With shared cloneable callbacks
-let callbacks = MyCallbacks::new();
-repo::update_workspace(&repos, |_| callbacks.clone());
+// With no-op callbacks (for tests)
+repo::update_workspace( & repos, | _ | NoOpCallbacks, & config);
 ```
 
-The trait-based approach provides zero-cost abstraction through monomorphization
-when callbacks are inlined, avoiding heap allocations and dynamic dispatch.
+### Decoupling Domain from Presentation
+
+The `UpdateCallbacks` trait decouples `repo.rs` (domain) from `output.rs` (presentation):
+
+```
+repo.rs (domain)           output.rs (presentation)
+     │                            │
+     │  UpdateCallbacks trait     │
+     ├────────────────────────────┤
+     │  on_update_start()         │  SingleRepoCallbacks
+     │  on_step()                 │  RepoProgressTracker
+     │  on_step_execute()         │  NoOpCallbacks
+     │  on_complete()             │     └── all implement trait
+     │  on_completion_status()    │
+     │                            │
+
+config.rs
+     │
+     └── git_logger() -> selects verbose or no-op logger
+```
+
+**Benefits:**
+
+- Domain layer has no direct imports from presentation layer
+- Easy to provide alternative implementations (quiet, verbose, progress bars)
+- Testable in isolation with `NoOpCallbacks`
+- Git command logging is configurable via `Config::git_logger()`
 
 ## Execution Flow
 
@@ -234,16 +352,37 @@ when callbacks are inlined, avoiding heap allocations and dynamic dispatch.
 
 **Why fetch before stash?** Updates remote tracking branches before modifying working directory state.
 
-**Why pull with --ff-only?** Prevents accidental merge commits during automated updates. If master has diverged from remote, the operation fails explicitly and user must resolve manually.
+**Why pull with --ff-only?** Prevents accidental merge commits during automated updates. If master has diverged from
+remote, the operation fails explicitly and user must resolve manually.
 
-On failure: exit immediately, record failure with step and error info. No automatic state restoration is attempted – this avoids compounding errors and lets the user resolve issues (like stash pop conflicts) manually with full context.
+On failure: exit immediately, record failure with step and error info. No automatic state restoration is attempted –
+this avoids compounding errors and lets the user resolve issues (like stash pop conflicts) manually with full context.
 
 ## CLI Interface
 
 ```
-git-daily-v2          # Update current repo or all repos in subdirectories
-git-daily-v2 -v       # Verbose mode - show git commands being run
+git-daily-v2              # Normal mode with progress bars
+git-daily-v2 -v, --verbose  # Show git commands (sequential in workspace)
+git-daily-v2 -q, --quiet    # Minimal output for CI/scripts
+git-daily-v2 --help         # Show help
+git-daily-v2 --version      # Show version
 ```
+
+### Verbosity Modes
+
+| Mode           | Progress    | Summary             | Git Commands    | Workspace Execution |
+|----------------|-------------|---------------------|-----------------|---------------------|
+| Quiet (`-q`)   | Hidden      | Count + errors only | Hidden          | Parallel            |
+| Normal         | Spinner/bar | Full details        | Hidden          | Parallel            |
+| Verbose (`-v`) | Hidden      | Full details        | Shown to stderr | Sequential          |
+
+### Exit Codes
+
+| Code | Meaning                                    |
+|------|--------------------------------------------|
+| 0    | All repositories updated successfully      |
+| 1    | Some repositories failed (partial success) |
+| 2    | All repositories failed                    |
 
 ## Output Examples
 
@@ -319,22 +458,23 @@ impl TestRepo {
 
 ### Core Tests
 
-| Test                                          | What it verifies                    |
-|-----------------------------------------------|-------------------------------------|
-| `updates_repo_and_returns_to_original_branch` | Happy path                          |
-| `stashes_and_restores_uncommitted_changes`    | Stash/restore flow                  |
-| `falls_back_to_main_when_no_master`           | Main branch detection               |
-| `reports_failure_when_no_remote`              | Error handling                      |
-| `handles_already_on_main_branch`              | Edge case                           |
-| `update_workspace_updates_multiple_repos`     | Basic workspace mode                |
-| `workspace_mixed_success_and_failure`         | Partial failures in workspace       |
-| `workspace_with_dirty_repos`                  | Stash handling across repos         |
-| `workspace_callbacks_called_for_each_repo`    | Callback invocation correctness     |
-| `workspace_repos_on_different_branches`       | Branch restoration per repo         |
-| `workspace_empty_directory`                   | Empty workspace handling            |
-| `workspace_nested_repos_not_discovered`       | Only immediate subdirs scanned      |
-| `workspace_order_independence`                | Parallel execution consistency      |
-| `workspace_with_untracked_files_only`         | Untracked files don't cause stash   |
+| Test                                          | What it verifies                  |
+|-----------------------------------------------|-----------------------------------|
+| `updates_repo_and_returns_to_original_branch` | Happy path                        |
+| `stashes_and_restores_uncommitted_changes`    | Stash/restore flow                |
+| `falls_back_to_main_when_no_master`           | Main branch detection             |
+| `reports_failure_when_no_remote`              | Error handling                    |
+| `handles_already_on_main_branch`              | Edge case                         |
+| `handles_detached_head`                       | Detached HEAD state handling      |
+| `update_workspace_updates_multiple_repos`     | Basic workspace mode              |
+| `workspace_mixed_success_and_failure`         | Partial failures in workspace     |
+| `workspace_with_dirty_repos`                  | Stash handling across repos       |
+| `workspace_callbacks_called_for_each_repo`    | Callback invocation correctness   |
+| `workspace_repos_on_different_branches`       | Branch restoration per repo       |
+| `workspace_empty_directory`                   | Empty workspace handling          |
+| `workspace_nested_repos_not_discovered`       | Only immediate subdirs scanned    |
+| `workspace_order_independence`                | Parallel execution consistency    |
+| `workspace_with_untracked_files_only`         | Untracked files don't cause stash |
 
 ### What NOT to Test
 
@@ -345,21 +485,79 @@ impl TestRepo {
 
 ## Design Decisions
 
-| Decision          | Choice                    | Rationale                                   |
-|-------------------|---------------------------|---------------------------------------------|
-| Git interaction   | Shell out to `git` binary | Matches user's git config, easier debugging |
-| Parallelism       | `rayon`                   | Simple `.par_iter()`, not async overhead    |
-| Single-repo callback | Closure-based          | Simpler for single use: `\|step\| { ... }`  |
-| Workspace callback | Trait-based (`UpdateCallbacks`) | Zero-cost abstraction, no heap alloc |
-| Error handling    | `anyhow`                  | CLI tool - good messages, not typed errors  |
-| File structure    | 5 source files            | lib.rs needed for test access               |
-| Types location    | In `repo.rs`              | <40 lines, tightly coupled to logic         |
-| Testing           | Integration with real git | No mocking complexity, catches real bugs    |
+| Decision             | Choice                          | Rationale                                   |
+|----------------------|---------------------------------|---------------------------------------------|
+| Git interaction      | Shell out to `git` binary       | Matches user's git config, easier debugging |
+| Parallelism          | `rayon`                         | Simple `.par_iter()`, not async overhead    |
+| Single-repo callback | Closure-based                   | Simpler for single use: `\|step\| { ... }`  |
+| Workspace callback   | Trait-based (`UpdateCallbacks`) | Zero-cost abstraction, no heap alloc        |
+| Error handling       | `anyhow`                        | CLI tool - good messages, not typed errors  |
+| File structure       | 6 source files                  | lib.rs needed for test access               |
+| CLI config           | `Config` struct                 | Extensible for future flags (dry-run, etc.) |
+| Types location       | In `repo.rs`                    | <40 lines, tightly coupled to logic         |
+| Testing              | Integration with real git       | No mocking complexity, catches real bugs    |
+
+## Edge Cases and Handling
+
+| Edge Case                    | Current Handling                         | Notes                                          |
+|------------------------------|------------------------------------------|------------------------------------------------|
+| **Detached HEAD**            | Stores commit SHA, restores after update | Displayed as `[abc1234...detached]` in summary |
+| **Stash pop conflicts**      | Fails entire operation                   | User must resolve manually                     |
+| **No master or main branch** | Fails at checkout step                   | Repo needs one of these branches               |
+| **Only untracked files**     | No stash created, no pop attempted       | Untracked files preserved                      |
+| **Empty workspace**          | Returns empty results, exit 0            | Not an error condition                         |
+| **Nested git repos**         | Only immediate subdirs scanned           | Intentional to avoid complexity                |
+| **Git command timeout**      | Fails after timeout (default 30s)        | Configurable via GIT_DAILY_TIMEOUT env var     |
+| **Shallow clones**           | Works normally                           | fetch/pull handle shallow repos                |
+| **No remote configured**     | Fails at fetch step                      | Clear error message                            |
+
+### Design Principle: Fail Fast, Don't Auto-Recover
+
+When an error occurs mid-update (e.g., checkout fails after stash), we:
+
+1. Record the failure with step and error info
+2. Exit immediately without attempting recovery
+3. Let the user resolve with full context
+
+**Rationale:** Auto-recovery (like auto-popping stash after checkout failure) could compound errors
+and leave repos in confusing states. Manual resolution is safer.
+
+## Layer Separation
+
+The codebase follows clean layer separation:
+
+```
+Presentation (main.rs, output.rs)
+    ↓
+Domain (repo.rs, config.rs, constants.rs)
+    ↓
+Infrastructure (git.rs)
+```
+
+**Key decoupling:** `git.rs` does not depend on `output.rs`. Instead, it uses a callback-based
+logging pattern (`GitLogger`) that the domain layer injects. This keeps infrastructure
+unaware of presentation concerns.
+
+## Thread Safety in WorkspaceProgress
+
+The `WorkspaceProgress` struct uses a consolidated `CompletionState` to reduce lock contention:
+
+```rust
+struct CompletionState {
+    repos: VecDeque<(String, bool)>,  // Recent completions
+    failed_count: usize,               // For status message
+    total_completed: usize,            // For ellipsis logic
+}
+
+// Single lock acquisition instead of three separate locks
+// Uses .expect() for clear error message on mutex poisoning
+let mut state = self .state.lock().expect("WorkspaceProgress state mutex poisoned");
+```
 
 ## Future Extensions (Not Implemented Now)
 
-- `--verbose` flag to show git commands
-- `--quiet` flag to suppress output
 - Config file for branch order, excluded dirs
 - Subcommands (`git-daily-v2 status`, `git-daily-v2 config`)
-- Max parallelism control
+- Max parallelism control (`-j, --jobs <N>`)
+- `--dry-run` flag to preview operations without executing
+- Warn on stash pop conflicts instead of failing

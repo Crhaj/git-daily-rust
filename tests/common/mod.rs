@@ -3,6 +3,7 @@
 //! Provides test fixtures and utilities for creating temporary git repositories.
 
 use anyhow::Result;
+use git_daily_rust::config::Config;
 use git_daily_rust::git::run_git;
 use git_daily_rust::repo::{UpdateCallbacks, UpdateResult, UpdateStep};
 use std::path::{Path, PathBuf};
@@ -10,11 +11,19 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tempfile::TempDir;
 
+/// Default config for tests (normal verbosity, no special options).
+pub fn test_config() -> Config {
+    Config::default()
+}
+
 /// A temporary git repository for testing.
 /// Automatically cleaned up when dropped.
 pub struct TestRepo {
-    _temp_dir: TempDir,
-    _remote_dir: Option<TempDir>,
+    // These fields must be kept alive to prevent temp directory cleanup
+    #[allow(dead_code)]
+    temp_dir: TempDir,
+    #[allow(dead_code)]
+    remote_dir: Option<TempDir>,
     path: PathBuf,
 }
 
@@ -24,8 +33,8 @@ impl TestRepo {
         let path = temp_dir.path().to_path_buf();
         init_repo(&path, branch)?;
         Ok(Self {
-            _temp_dir: temp_dir,
-            _remote_dir: None,
+            temp_dir,
+            remote_dir: None,
             path,
         })
     }
@@ -38,8 +47,9 @@ impl TestRepo {
     /// Creates a test repository with a configured remote.
     pub fn with_remote(branch: Option<&str>) -> Result<Self> {
         let branch = branch.unwrap_or("master");
+        let config = test_config();
         let remote_dir = TempDir::new()?;
-        run_git(remote_dir.path(), &["init", "--bare"])?;
+        run_git(remote_dir.path(), &config, &["init", "--bare"])?;
 
         let temp_dir = TempDir::new()?;
         let path = temp_dir.path().to_path_buf();
@@ -47,13 +57,14 @@ impl TestRepo {
 
         run_git(
             &path,
+            &config,
             &["remote", "add", "origin", remote_dir.path().to_str().unwrap()],
         )?;
-        run_git(&path, &["push", "-u", "origin", branch])?;
+        run_git(&path, &config, &["push", "-u", "origin", branch])?;
 
         Ok(Self {
-            _temp_dir: temp_dir,
-            _remote_dir: Some(remote_dir),
+            temp_dir,
+            remote_dir: Some(remote_dir),
             path,
         })
     }
@@ -64,7 +75,7 @@ impl TestRepo {
 
     /// Creates a new branch without checking it out.
     pub fn create_branch(&self, name: &str) -> Result<()> {
-        run_git(&self.path, &["branch", name])?;
+        run_git(&self.path, &test_config(), &["branch", name])?;
         Ok(())
     }
 
@@ -82,7 +93,7 @@ impl TestRepo {
 
     /// Returns true if there's an active stash.
     pub fn has_stash(&self) -> Result<bool> {
-        let output = run_git(&self.path, &["stash", "list"])?;
+        let output = run_git(&self.path, &test_config(), &["stash", "list"])?;
         Ok(!output.is_empty())
     }
 
@@ -94,7 +105,7 @@ impl TestRepo {
     /// Removes the remote directory, simulating a broken remote.
     /// Used for testing failure scenarios.
     pub fn remove_remote(&mut self) {
-        self._remote_dir = None;
+        self.remote_dir = None;
     }
 }
 
@@ -132,12 +143,13 @@ impl UpdateCallbacks for CountingCallbacks {
 
 /// Initializes a git repository at the given path with an initial commit.
 pub fn init_repo(path: &Path, branch: &str) -> Result<()> {
-    run_git(path, &["init", "-b", branch])?;
-    run_git(path, &["config", "user.email", "test@example.com"])?;
-    run_git(path, &["config", "user.name", "Test User"])?;
+    let config = test_config();
+    run_git(path, &config, &["init", "-b", branch])?;
+    run_git(path, &config, &["config", "user.email", "test@example.com"])?;
+    run_git(path, &config, &["config", "user.name", "Test User"])?;
     std::fs::write(path.join("README.md"), "# Test Repo\n")?;
-    run_git(path, &["add", "README.md"])?;
-    run_git(path, &["commit", "-m", "Initial commit"])?;
+    run_git(path, &config, &["add", "README.md"])?;
+    run_git(path, &config, &["commit", "-m", "Initial commit"])?;
     Ok(())
 }
 
@@ -146,6 +158,7 @@ pub fn setup_workspace_with_repos(
     workspace: &TempDir,
     repo_configs: &[(&str, &str)],
 ) -> Result<()> {
+    let config = test_config();
     for (name, branch) in repo_configs {
         let repo_path = workspace.path().join(name);
         let remote_path = workspace.path().join(format!("{}-remote", name));
@@ -154,12 +167,13 @@ pub fn setup_workspace_with_repos(
         std::fs::create_dir_all(&remote_path)?;
 
         init_repo(&repo_path, branch)?;
-        run_git(&remote_path, &["init", "--bare"])?;
+        run_git(&remote_path, &config, &["init", "--bare"])?;
         run_git(
             &repo_path,
+            &config,
             &["remote", "add", "origin", remote_path.to_str().unwrap()],
         )?;
-        run_git(&repo_path, &["push", "-u", "origin", branch])?;
+        run_git(&repo_path, &config, &["push", "-u", "origin", branch])?;
     }
     Ok(())
 }
