@@ -1,10 +1,13 @@
 mod common;
 
 use common::{CountingCallbacks, init_repo, setup_workspace_with_repos, test_config};
+use git_daily_rust::config::Verbosity;
 use git_daily_rust::git;
 use git_daily_rust::output::NoOpCallbacks;
-use git_daily_rust::repo::{self, UpdateOutcome};
+use git_daily_rust::repo::{self, UpdateCallbacks, UpdateOutcome, UpdateStep};
 use std::collections::HashSet;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tempfile::TempDir;
 
 #[test]
@@ -198,5 +201,53 @@ fn test_workspace_ignores_non_git_subdirs() -> anyhow::Result<()> {
     let results = repo::update_workspace(&repos, |_| NoOpCallbacks, &config);
     assert_eq!(results.len(), 1);
     assert!(matches!(results[0].outcome, UpdateOutcome::Success(_)));
+    Ok(())
+}
+
+#[derive(Clone)]
+struct ConcurrencyCallbacks {
+    active: Arc<AtomicUsize>,
+    saw_concurrent: Arc<AtomicBool>,
+}
+
+impl UpdateCallbacks for ConcurrencyCallbacks {
+    fn on_step(&self, _step: &UpdateStep) {}
+
+    fn on_complete(&self, _result: &repo::UpdateResult) {
+        self.active.fetch_sub(1, Ordering::SeqCst);
+    }
+
+    fn on_update_start(&self, _repo_name: &str) {
+        let previous = self.active.fetch_add(1, Ordering::SeqCst);
+        if previous > 0 {
+            self.saw_concurrent.store(true, Ordering::SeqCst);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+}
+
+#[test]
+fn test_workspace_verbose_runs_sequentially() -> anyhow::Result<()> {
+    let mut config = test_config();
+    config.verbosity = Verbosity::Verbose;
+
+    let workspace = TempDir::new()?;
+    setup_workspace_with_repos(&workspace, &[("repo-a", "master"), ("repo-b", "master")])?;
+
+    let active = Arc::new(AtomicUsize::new(0));
+    let saw_concurrent = Arc::new(AtomicBool::new(false));
+
+    let repos = repo::find_git_repos(workspace.path());
+    let results = repo::update_workspace(
+        &repos,
+        |_| ConcurrencyCallbacks {
+            active: Arc::clone(&active),
+            saw_concurrent: Arc::clone(&saw_concurrent),
+        },
+        &config,
+    );
+
+    assert_eq!(results.len(), 2);
+    assert!(!saw_concurrent.load(Ordering::SeqCst));
     Ok(())
 }

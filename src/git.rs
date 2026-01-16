@@ -19,24 +19,12 @@ pub fn no_op_logger(_config: &Config, _args: &[&str], _output: Option<&str>) {}
 /// Git command logger for verbose mode.
 /// Called with output=None before command execution, output=Some after.
 pub fn verbose_logger(config: &Config, args: &[&str], output: Option<&str>) {
-    use colored::Colorize;
-
     if !config.is_verbose() {
         return;
     }
 
-    match output {
-        None => {
-            // Before execution: print the command
-            eprintln!("  {} git {}", "→".cyan(), args.join(" "));
-        }
-        Some(out) if !out.is_empty() => {
-            // After execution: print the output
-            for line in out.lines() {
-                eprintln!("    {}", line.dimmed());
-            }
-        }
-        _ => {}
+    for line in build_verbose_logger_lines(args, output) {
+        eprintln!("{}", line);
     }
 }
 
@@ -69,6 +57,16 @@ fn wait_with_timeout(
     child: &mut std::process::Child,
     timeout: std::time::Duration,
 ) -> anyhow::Result<std::process::Output> {
+    wait_with_timeout_inner(child, timeout)
+}
+
+fn wait_with_timeout_inner<C>(
+    child: &mut C,
+    timeout: std::time::Duration,
+) -> anyhow::Result<std::process::Output>
+where
+    C: WaitableChild,
+{
     use std::time::Instant;
 
     let start = Instant::now();
@@ -78,29 +76,8 @@ fn wait_with_timeout(
         match child.try_wait() {
             Ok(Some(status)) => {
                 // Process has exited, collect output
-                let stdout = child
-                    .stdout
-                    .take()
-                    .map(|mut s| {
-                        let mut buf = Vec::new();
-                        std::io::Read::read_to_end(&mut s, &mut buf)
-                            .context("Failed to read stdout from git process")
-                            .map(|_| buf)
-                    })
-                    .transpose()?
-                    .unwrap_or_default();
-
-                let stderr = child
-                    .stderr
-                    .take()
-                    .map(|mut s| {
-                        let mut buf = Vec::new();
-                        std::io::Read::read_to_end(&mut s, &mut buf)
-                            .context("Failed to read stderr from git process")
-                            .map(|_| buf)
-                    })
-                    .transpose()?
-                    .unwrap_or_default();
+                let stdout = child.read_stdout()?;
+                let stderr = child.read_stderr()?;
 
                 return Ok(std::process::Output {
                     status,
@@ -117,6 +94,49 @@ fn wait_with_timeout(
             }
             Err(e) => return Err(e).context("Failed to wait for git process"),
         }
+    }
+}
+
+trait WaitableChild {
+    fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>>;
+    fn read_stdout(&mut self) -> anyhow::Result<Vec<u8>>;
+    fn read_stderr(&mut self) -> anyhow::Result<Vec<u8>>;
+}
+
+impl WaitableChild for std::process::Child {
+    fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
+        std::process::Child::try_wait(self)
+    }
+
+    fn read_stdout(&mut self) -> anyhow::Result<Vec<u8>> {
+        let mut buf = Vec::new();
+        if let Some(mut stdout) = self.stdout.take() {
+            std::io::Read::read_to_end(&mut stdout, &mut buf)
+                .context("Failed to read stdout from git process")?;
+        }
+        Ok(buf)
+    }
+
+    fn read_stderr(&mut self) -> anyhow::Result<Vec<u8>> {
+        let mut buf = Vec::new();
+        if let Some(mut stderr) = self.stderr.take() {
+            std::io::Read::read_to_end(&mut stderr, &mut buf)
+                .context("Failed to read stderr from git process")?;
+        }
+        Ok(buf)
+    }
+}
+
+fn build_verbose_logger_lines(args: &[&str], output: Option<&str>) -> Vec<String> {
+    use colored::Colorize;
+
+    match output {
+        None => vec![format!("  {} git {}", "→".cyan(), args.join(" "))],
+        Some(out) if !out.is_empty() => out
+            .lines()
+            .map(|line| format!("    {}", line.dimmed()))
+            .collect(),
+        _ => Vec::new(),
     }
 }
 
@@ -372,6 +392,9 @@ fn validate_branch_name(branch: &str) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io;
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt;
 
     #[test]
     fn test_validate_branch_name_accepts_valid_names() {
@@ -483,5 +506,98 @@ mod tests {
                 .to_string()
                 .contains("'<remote>/<branch>'")
         );
+    }
+
+    #[test]
+    fn test_build_verbose_logger_lines_command() {
+        colored::control::set_override(false);
+        let lines = build_verbose_logger_lines(&["status", "--porcelain"], None);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("git status --porcelain"));
+    }
+
+    #[test]
+    fn test_build_verbose_logger_lines_output() {
+        colored::control::set_override(false);
+        let lines = build_verbose_logger_lines(&["status"], Some("line1\nline2"));
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("line1"));
+        assert!(lines[1].contains("line2"));
+    }
+
+    #[test]
+    fn test_build_verbose_logger_lines_empty_output() {
+        colored::control::set_override(false);
+        let lines = build_verbose_logger_lines(&["status"], Some(""));
+        assert!(lines.is_empty());
+    }
+
+    struct FakeChild {
+        try_wait: Option<io::Result<Option<std::process::ExitStatus>>>,
+        stdout: Vec<u8>,
+        stderr: Vec<u8>,
+    }
+
+    impl WaitableChild for FakeChild {
+        fn try_wait(&mut self) -> io::Result<Option<std::process::ExitStatus>> {
+            self.try_wait.take().unwrap_or_else(|| Ok(None))
+        }
+
+        fn read_stdout(&mut self) -> anyhow::Result<Vec<u8>> {
+            Ok(std::mem::take(&mut self.stdout))
+        }
+
+        fn read_stderr(&mut self) -> anyhow::Result<Vec<u8>> {
+            Ok(std::mem::take(&mut self.stderr))
+        }
+    }
+
+    #[test]
+    fn test_wait_with_timeout_times_out() {
+        let mut child = FakeChild {
+            try_wait: Some(Ok(None)),
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        };
+        let result = wait_with_timeout_inner(&mut child, std::time::Duration::from_millis(0));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("timed out"));
+    }
+
+    #[test]
+    fn test_wait_with_timeout_propagates_try_wait_error() {
+        let mut child = FakeChild {
+            try_wait: Some(Err(io::Error::new(io::ErrorKind::Other, "boom"))),
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        };
+        let result = wait_with_timeout_inner(&mut child, std::time::Duration::from_secs(1));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Failed to wait"));
+    }
+
+    #[test]
+    fn test_wait_with_timeout_reads_output() {
+        let status = {
+            #[cfg(unix)]
+            {
+                std::process::ExitStatus::from_raw(0)
+            }
+            #[cfg(not(unix))]
+            {
+                std::process::ExitStatus::default()
+            }
+        };
+
+        let mut child = FakeChild {
+            try_wait: Some(Ok(Some(status))),
+            stdout: b"ok\n".to_vec(),
+            stderr: b"warn\n".to_vec(),
+        };
+        let output = wait_with_timeout_inner(&mut child, std::time::Duration::from_secs(1))
+            .expect("expected output");
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"ok\n");
+        assert_eq!(output.stderr, b"warn\n");
     }
 }

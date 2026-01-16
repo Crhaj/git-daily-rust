@@ -29,7 +29,7 @@ pub fn print_repo_header(config: &Config, repo_name: &str) {
     if !config.is_verbose() {
         return;
     }
-    eprintln!("\n{}", format!("[{}]", repo_name).white().bold());
+    eprintln!("{}", build_repo_header_line(repo_name));
 }
 
 /// Prints a step progress message in verbose mode.
@@ -37,7 +37,7 @@ pub fn print_step(config: &Config, step: &UpdateStep) {
     if !config.is_verbose() {
         return;
     }
-    eprintln!("  {}...", step.to_string().dimmed());
+    eprintln!("{}", build_step_line(step));
 }
 
 /// Prints completion status (verbose mode only).
@@ -45,10 +45,8 @@ pub fn print_completion_status(config: &Config, success: bool, error: Option<&st
     if !config.is_verbose() {
         return;
     }
-    if success {
-        eprintln!("  {} completed successfully", "✓".green());
-    } else if let Some(err) = error {
-        eprintln!("  {} failed: {}", "✗".red(), err);
+    if let Some(line) = build_completion_status_line(success, error) {
+        eprintln!("{}", line);
     }
 }
 
@@ -323,25 +321,14 @@ pub fn print_working_dir(path: &Path, config: &Config) {
     if config.is_quiet() {
         return;
     }
-    println!(
-        "{} {}",
-        "Working in:".cyan(),
-        path.display().to_string().white().bold()
-    )
+    println!("{}", build_working_dir_line(path));
 }
 
 pub fn print_workspace_start(count: usize, config: &Config) {
     if config.is_quiet() {
         return;
     }
-    if count == 0 {
-        print_no_repos()
-    } else {
-        println!(
-            "{}",
-            format!("Starting in workspace mode with {} repositories", count).dimmed()
-        )
-    }
+    println!("{}", build_workspace_start_line(count));
 }
 
 pub fn print_summary(results: &[UpdateResult], duration: Duration, config: &Config) {
@@ -365,8 +352,42 @@ fn print_normal_summary(results: &[UpdateResult], duration: Duration) {
     print!("{}", output);
 }
 
-fn print_no_repos() {
-    println!("{}", "No git repositories found".yellow().bold())
+fn build_repo_header_line(repo_name: &str) -> String {
+    format!("\n{}", format!("[{}]", repo_name).white().bold())
+}
+
+fn build_step_line(step: &UpdateStep) -> String {
+    format!("  {}...", step.to_string().dimmed())
+}
+
+fn build_completion_status_line(success: bool, error: Option<&str>) -> Option<String> {
+    if success {
+        Some(format!("  {} completed successfully", "✓".green()))
+    } else {
+        error.map(|err| format!("  {} failed: {}", "✗".red(), err))
+    }
+}
+
+fn build_working_dir_line(path: &Path) -> String {
+    format!(
+        "{} {}",
+        "Working in:".cyan(),
+        path.display().to_string().white().bold()
+    )
+}
+
+fn build_workspace_start_line(count: usize) -> String {
+    if count == 0 {
+        build_no_repos_line()
+    } else {
+        format!("Starting in workspace mode with {} repositories", count)
+            .dimmed()
+            .to_string()
+    }
+}
+
+fn build_no_repos_line() -> String {
+    "No git repositories found".yellow().bold().to_string()
 }
 
 fn build_quiet_summary(results: &[UpdateResult]) -> (String, Vec<String>) {
@@ -733,6 +754,54 @@ mod tests {
         .join("\n");
 
         assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn test_build_repo_header_line() {
+        colored::control::set_override(false);
+        let line = build_repo_header_line("repo-a");
+        assert!(line.contains("[repo-a]"));
+    }
+
+    #[test]
+    fn test_build_step_line() {
+        colored::control::set_override(false);
+        let line = build_step_line(&UpdateStep::Fetching);
+        assert!(line.contains("Fetching"));
+        assert!(line.ends_with("..."));
+    }
+
+    #[test]
+    fn test_build_completion_status_line_variants() {
+        colored::control::set_override(false);
+        let success_line = build_completion_status_line(true, None).expect("missing line");
+        assert!(success_line.contains("completed successfully"));
+
+        let failure_line = build_completion_status_line(false, Some("boom")).expect("missing line");
+        assert!(failure_line.contains("failed"));
+        assert!(failure_line.contains("boom"));
+
+        let none_line = build_completion_status_line(false, None);
+        assert!(none_line.is_none());
+    }
+
+    #[test]
+    fn test_build_working_dir_line() {
+        colored::control::set_override(false);
+        let line = build_working_dir_line(Path::new("/tmp/repo"));
+        assert!(line.contains("Working in:"));
+        assert!(line.contains("/tmp/repo"));
+    }
+
+    #[test]
+    fn test_build_workspace_start_line() {
+        colored::control::set_override(false);
+        let line = build_workspace_start_line(3);
+        assert!(line.contains("workspace mode"));
+        assert!(line.contains("3"));
+
+        let empty_line = build_workspace_start_line(0);
+        assert!(empty_line.contains("No git repositories found"));
     }
 
     #[test]

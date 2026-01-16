@@ -282,6 +282,50 @@ where
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_update_step_display_labels() {
+        assert_eq!(UpdateStep::Started.to_string(), "Starting");
+        assert_eq!(UpdateStep::DetectingBranch.to_string(), "Detecting branch");
+        assert_eq!(UpdateStep::CheckingChanges.to_string(), "Checking changes");
+        assert_eq!(UpdateStep::Fetching.to_string(), "Fetching");
+        assert_eq!(UpdateStep::Stashing.to_string(), "Stashing");
+        assert_eq!(UpdateStep::CheckingOut.to_string(), "Checking out");
+        assert_eq!(UpdateStep::Pulling.to_string(), "Pulling");
+        assert_eq!(UpdateStep::RestoringBranch.to_string(), "Restoring branch");
+        assert_eq!(UpdateStep::PoppingStash.to_string(), "Popping stash");
+        assert_eq!(UpdateStep::Completed.to_string(), "Completed");
+    }
+
+    #[test]
+    fn test_original_head_detached_display_and_ref() {
+        let head = OriginalHead::DetachedAt("abcdef1234567890".to_string());
+        assert_eq!(head.git_ref(), "abcdef1234567890");
+        assert!(head.is_detached());
+        assert_eq!(head.display(), "[abcdef1...detached]");
+    }
+
+    #[test]
+    fn test_original_head_branch_display_and_ref() {
+        let head = OriginalHead::Branch("feature-x".to_string());
+        assert_eq!(head.git_ref(), "feature-x");
+        assert!(!head.is_detached());
+        assert_eq!(head.display(), "[feature-x]");
+    }
+
+    #[test]
+    fn test_update_failure_display() {
+        let failure = UpdateFailure {
+            error: "boom".to_string(),
+            step: UpdateStep::Fetching,
+        };
+        assert_eq!(failure.to_string(), "failed at Fetching: boom");
+    }
+}
+
 fn run_step<T, C>(
     step: UpdateStep,
     path: &Path,

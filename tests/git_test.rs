@@ -2,6 +2,7 @@ mod common;
 
 use common::{TestRepo, test_config};
 use git_daily_rust::git::{self, no_op_logger};
+use std::path::PathBuf;
 use tempfile::TempDir;
 
 /// Shorthand for the test logger (no-op for tests)
@@ -300,6 +301,17 @@ fn test_run_git_reports_failure_for_unknown_ref() -> anyhow::Result<()> {
     let result = git::run_git(repo.path(), &config, &["rev-parse", "does-not-exist"]);
     assert!(result.is_err());
     Ok(())
+}
+
+#[test]
+fn test_run_git_reports_spawn_failure_for_missing_repo_path() {
+    let config = test_config();
+    let missing_path = PathBuf::from("/no/such/repo/for/test");
+
+    let result = git::run_git(&missing_path, &config, &["status"]);
+    assert!(result.is_err());
+    let message = result.unwrap_err().to_string();
+    assert!(message.contains("Failed to spawn git command"));
 }
 
 #[test]
