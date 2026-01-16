@@ -9,9 +9,13 @@ use std::path::Path;
 
 #[derive(Parser)]
 #[command(name = "git-daily-v2")]
-#[command(about = "Update master/main branches in git repositories. Useful to update everything in your workspace at once.")]
+#[command(
+    about = "Update master/main branches in git repositories. Useful to update everything in your workspace at once."
+)]
 #[command(version)]
-#[command(after_help = "EXIT CODES:\n  0  All repositories updated successfully\n  1  Some repositories failed\n  2  All repositories failed")]
+#[command(
+    after_help = "EXIT CODES:\n  0  All repositories updated successfully\n  1  Some repositories failed\n  2  All repositories failed"
+)]
 struct Args {
     /// Show git commands being executed (runs sequentially in workspace mode)
     #[arg(short, long)]
@@ -78,9 +82,11 @@ fn run_workspace(path: &Path, config: &Config) -> Vec<repo::UpdateResult> {
     }
 
     let workspace_progress = output::create_workspace_progress(sub_dirs.len(), config);
-    let results = repo::update_workspace(&sub_dirs, |dir| {
-        workspace_progress.create_repo_tracker(get_repo_name(dir), *config)
-    }, config);
+    let results = repo::update_workspace(
+        &sub_dirs,
+        |dir| workspace_progress.create_repo_tracker(get_repo_name(dir), *config),
+        config,
+    );
 
     workspace_progress.finish();
     results

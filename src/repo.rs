@@ -175,7 +175,6 @@ impl fmt::Display for UpdateFailure {
     }
 }
 
-
 struct UpdateError {
     source: anyhow::Error,
     step: UpdateStep,
@@ -219,7 +218,10 @@ where
 {
     callbacks.on_step(&UpdateStep::Started);
 
-    let repo_name = path.file_name().and_then(|n| n.to_str()).unwrap_or(DEFAULT_REPO_NAME);
+    let repo_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(DEFAULT_REPO_NAME);
     callbacks.on_update_start(repo_name);
 
     let start = std::time::Instant::now();
@@ -255,7 +257,11 @@ where
 
 /// Updates multiple repositories in parallel with per-repository callbacks.
 /// In verbose mode, runs sequentially for readable output.
-pub fn update_workspace<F, C>(repos: &[PathBuf], make_callbacks: F, config: &Config) -> Vec<UpdateResult>
+pub fn update_workspace<F, C>(
+    repos: &[PathBuf],
+    make_callbacks: F,
+    config: &Config,
+) -> Vec<UpdateResult>
 where
     F: Fn(&Path) -> C + Sync,
     C: UpdateCallbacks,

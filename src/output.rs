@@ -79,12 +79,7 @@ impl SingleRepoProgress {
 
     pub fn finish_failed(&self, repo_name: &str, error: &str) {
         if let Some(spinner) = &self.spinner {
-            spinner.finish_with_message(format!(
-                "{} {} failed: {}",
-                "✗".red(),
-                repo_name,
-                error
-            ));
+            spinner.finish_with_message(format!("{} {} failed: {}", "✗".red(), repo_name, error));
         }
     }
 }
@@ -103,7 +98,9 @@ impl SingleRepoCallbacks {
 
     /// Finish the progress bar with success/failure message.
     pub fn finish(&self, result: &UpdateResult) {
-        let repo_name = result.path.file_name()
+        let repo_name = result
+            .path
+            .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or(DEFAULT_REPO_NAME);
 
@@ -212,11 +209,7 @@ impl WorkspaceProgress {
                 let idx = if show_ellipsis { i - 1 } else { i };
                 if idx < state.repos.len() {
                     let (name, success) = &state.repos[idx];
-                    let symbol = if *success {
-                        "✓".green()
-                    } else {
-                        "✗".red()
-                    };
+                    let symbol = if *success { "✓".green() } else { "✗".red() };
                     slot.set_message(format!("{} {}", symbol, name));
                 } else {
                     slot.set_message("");
@@ -489,7 +482,10 @@ mod tests {
     #[test]
     fn test_format_step_message_covers_all_known_steps() {
         // Ensure all known steps have meaningful messages
-        assert_eq!(format_step_message(&UpdateStep::Started), "Starting update...");
+        assert_eq!(
+            format_step_message(&UpdateStep::Started),
+            "Starting update..."
+        );
         assert_eq!(
             format_step_message(&UpdateStep::DetectingBranch),
             "Detecting current branch..."
@@ -498,7 +494,10 @@ mod tests {
             format_step_message(&UpdateStep::CheckingChanges),
             "Checking for uncommitted changes..."
         );
-        assert_eq!(format_step_message(&UpdateStep::Fetching), "Fetching from origin...");
+        assert_eq!(
+            format_step_message(&UpdateStep::Fetching),
+            "Fetching from origin..."
+        );
         assert_eq!(
             format_step_message(&UpdateStep::Stashing),
             "Stashing uncommitted changes..."

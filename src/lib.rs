@@ -38,10 +38,10 @@
 //! println!("{}/{} repositories updated", succeeded, results.len());
 //! ```
 
+pub mod cleanup;
 pub mod config;
 pub mod constants;
 pub mod git;
 pub mod output;
-pub mod repo;
-pub mod cleanup;
 pub mod prompt;
+pub mod repo;

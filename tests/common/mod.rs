@@ -7,8 +7,8 @@ use git_daily_rust::config::Config;
 use git_daily_rust::git::run_git;
 use git_daily_rust::repo::{UpdateCallbacks, UpdateResult, UpdateStep};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tempfile::TempDir;
 
 /// Default config for tests (normal verbosity, no special options).
@@ -58,7 +58,12 @@ impl TestRepo {
         run_git(
             &path,
             &config,
-            &["remote", "add", "origin", remote_dir.path().to_str().unwrap()],
+            &[
+                "remote",
+                "add",
+                "origin",
+                remote_dir.path().to_str().unwrap(),
+            ],
         )?;
         run_git(&path, &config, &["push", "-u", "origin", branch])?;
 
