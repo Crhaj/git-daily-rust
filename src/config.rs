@@ -43,3 +43,43 @@ pub enum Verbosity {
     Normal,
     Verbose,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::git;
+
+    #[test]
+    fn test_config_quiet_and_verbose_flags() {
+        let quiet = Config {
+            verbosity: Verbosity::Quiet,
+        };
+        assert!(quiet.is_quiet());
+        assert!(!quiet.is_verbose());
+
+        let verbose = Config {
+            verbosity: Verbosity::Verbose,
+        };
+        assert!(!verbose.is_quiet());
+        assert!(verbose.is_verbose());
+    }
+
+    #[test]
+    fn test_git_logger_selects_verbose_or_no_op() {
+        let verbose = Config {
+            verbosity: Verbosity::Verbose,
+        };
+        assert!(std::ptr::fn_addr_eq(
+            verbose.git_logger() as GitLogger,
+            git::verbose_logger as GitLogger
+        ));
+
+        let normal = Config {
+            verbosity: Verbosity::Normal,
+        };
+        assert!(std::ptr::fn_addr_eq(
+            normal.git_logger() as GitLogger,
+            git::no_op_logger as GitLogger
+        ));
+    }
+}

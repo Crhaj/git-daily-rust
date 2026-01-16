@@ -1,6 +1,7 @@
 //! Test infrastructure for git-daily-rust integration tests.
 //!
 //! Provides test fixtures and utilities for creating temporary git repositories.
+#![allow(dead_code)]
 
 use anyhow::Result;
 use git_daily_rust::config::Config;

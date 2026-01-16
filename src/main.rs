@@ -116,3 +116,90 @@ fn get_repo_name(path: &Path) -> &str {
         .and_then(|n| n.to_str())
         .unwrap_or(DEFAULT_REPO_NAME)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use git_daily_rust::repo::{UpdateFailure, UpdateResult, UpdateSuccess};
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    #[test]
+    fn test_args_to_config_respects_quiet_and_verbose() {
+        let quiet = Args::parse_from(["git-daily-v2", "--quiet"]);
+        assert!(quiet.to_config().is_quiet());
+
+        let verbose = Args::parse_from(["git-daily-v2", "--verbose"]);
+        assert!(verbose.to_config().is_verbose());
+
+        let normal = Args::parse_from(["git-daily-v2"]);
+        assert!(!normal.to_config().is_quiet());
+        assert!(!normal.to_config().is_verbose());
+    }
+
+    #[test]
+    fn test_compute_exit_code_all_success() {
+        let results = vec![UpdateResult {
+            path: PathBuf::from("/repo"),
+            outcome: UpdateOutcome::Success(UpdateSuccess {
+                original_head: repo::OriginalHead::Branch("main".to_string()),
+                master_branch: "main",
+                had_stash: false,
+            }),
+            duration: Duration::from_secs(1),
+        }];
+        assert_eq!(compute_exit_code(&results), 0);
+    }
+
+    #[test]
+    fn test_compute_exit_code_partial_failure() {
+        let success = UpdateResult {
+            path: PathBuf::from("/repo-success"),
+            outcome: UpdateOutcome::Success(UpdateSuccess {
+                original_head: repo::OriginalHead::Branch("main".to_string()),
+                master_branch: "main",
+                had_stash: false,
+            }),
+            duration: Duration::from_secs(1),
+        };
+        let failure = UpdateResult {
+            path: PathBuf::from("/repo-fail"),
+            outcome: UpdateOutcome::Failed(UpdateFailure {
+                error: "boom".to_string(),
+                step: repo::UpdateStep::Fetching,
+            }),
+            duration: Duration::from_secs(1),
+        };
+        assert_eq!(compute_exit_code(&[success, failure]), 1);
+    }
+
+    #[test]
+    fn test_compute_exit_code_all_failed() {
+        let failure = UpdateResult {
+            path: PathBuf::from("/repo-fail"),
+            outcome: UpdateOutcome::Failed(UpdateFailure {
+                error: "boom".to_string(),
+                step: repo::UpdateStep::Fetching,
+            }),
+            duration: Duration::from_secs(1),
+        };
+        assert_eq!(compute_exit_code(&[failure]), 2);
+    }
+
+    #[test]
+    fn test_compute_exit_code_empty() {
+        assert_eq!(compute_exit_code(&[]), 0);
+    }
+
+    #[test]
+    fn test_get_repo_name_falls_back_to_default() {
+        let name = get_repo_name(Path::new("/"));
+        assert_eq!(name, DEFAULT_REPO_NAME);
+    }
+
+    #[test]
+    fn test_get_repo_name_uses_last_component() {
+        let name = get_repo_name(Path::new("/tmp/my-repo"));
+        assert_eq!(name, "my-repo");
+    }
+}

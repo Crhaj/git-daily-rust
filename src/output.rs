@@ -353,62 +353,86 @@ pub fn print_summary(results: &[UpdateResult], duration: Duration, config: &Conf
 }
 
 fn print_quiet_summary(results: &[UpdateResult]) {
-    let (successes, failures): (Vec<_>, Vec<_>) = results
-        .iter()
-        .partition(|r| matches!(r.outcome, UpdateOutcome::Success(_)));
-
-    // Always print count to stdout
-    println!("{}/{} repositories updated", successes.len(), results.len());
-
-    // Print failures to stderr
-    for result in &failures {
-        if let UpdateOutcome::Failed(failure) = &result.outcome {
-            eprintln!("error: {}: {}", result.path.display(), failure.error);
-        }
+    let (stdout_line, stderr_lines) = build_quiet_summary(results);
+    println!("{}", stdout_line);
+    for line in stderr_lines {
+        eprintln!("{}", line);
     }
 }
 
 fn print_normal_summary(results: &[UpdateResult], duration: Duration) {
-    print_section("Summary");
-    let (successes, failures): (Vec<_>, Vec<_>) = results
-        .iter()
-        .partition(|r| matches!(r.outcome, UpdateOutcome::Success(_)));
-
-    print_successes(&successes);
-    print_failures(&failures);
-
-    println!(
-        "{}: {}/{} repos in {}",
-        "Total".white().bold(),
-        successes.len(),
-        results.len(),
-        format_duration(duration)
-    );
+    let output = build_normal_summary(results, duration);
+    print!("{}", output);
 }
 
 fn print_no_repos() {
     println!("{}", "No git repositories found".yellow().bold())
 }
 
+fn build_quiet_summary(results: &[UpdateResult]) -> (String, Vec<String>) {
+    let (successes, failures): (Vec<_>, Vec<_>) = results
+        .iter()
+        .partition(|r| matches!(r.outcome, UpdateOutcome::Success(_)));
+
+    let stdout_line = format!("{}/{} repositories updated", successes.len(), results.len());
+    let stderr_lines = failures
+        .iter()
+        .filter_map(|result| match &result.outcome {
+            UpdateOutcome::Failed(failure) => Some(format!(
+                "error: {}: {}",
+                result.path.display(),
+                failure.error
+            )),
+            _ => None,
+        })
+        .collect();
+
+    (stdout_line, stderr_lines)
+}
+
+fn build_normal_summary(results: &[UpdateResult], duration: Duration) -> String {
+    let mut output = String::new();
+    output.push_str(&build_section("Summary"));
+
+    let (successes, failures): (Vec<_>, Vec<_>) = results
+        .iter()
+        .partition(|r| matches!(r.outcome, UpdateOutcome::Success(_)));
+
+    output.push_str(&build_success_lines(&successes));
+    output.push_str(&build_failure_lines(&failures));
+    output.push_str(&format!(
+        "{}: {}/{} repos in {}",
+        "Total".white().bold(),
+        successes.len(),
+        results.len(),
+        format_duration(duration)
+    ));
+    output.push('\n');
+
+    output
+}
+
 fn format_duration(duration: Duration) -> String {
     format!("{:.2}s", duration.as_secs_f32())
 }
 
-fn print_section(title: &str) {
+fn build_section(title: &str) -> String {
     let line = "=".repeat(50).cyan().dimmed();
     let padding = (50 - title.len()) / 2;
     let centered = format!("{:>width$}", title, width = padding + title.len());
-    println!("\n{}\n{}\n{}\n", line, centered.cyan().bold(), line);
+    format!("\n{}\n{}\n{}\n\n", line, centered.cyan().bold(), line)
 }
 
-fn print_successes(successes: &[&UpdateResult]) {
+fn build_success_lines(successes: &[&UpdateResult]) -> String {
+    let mut output = String::new();
     if successes.is_empty() {
-        return;
+        return output;
     }
-    println!(
+    output.push_str(&format!(
         "{}",
         format!("Succeeded ({}):", successes.len()).green().bold()
-    );
+    ));
+    output.push('\n');
 
     for result in successes {
         if let UpdateOutcome::Success(success) = &result.outcome {
@@ -417,38 +441,47 @@ fn print_successes(successes: &[&UpdateResult]) {
             } else {
                 "".normal()
             };
-            println!(
+            output.push_str(&format!(
                 "  {} {} {} {} in {}",
                 "OK".green().bold(),
                 result.path.display().to_string().white(),
                 success.original_head.display().cyan(),
                 stash_msg,
                 format_duration(result.duration).dimmed(),
-            );
+            ));
+            output.push('\n');
         }
     }
-    println!();
+    output.push('\n');
+    output
 }
 
-fn print_failures(failures: &[&UpdateResult]) {
+fn build_failure_lines(failures: &[&UpdateResult]) -> String {
+    let mut output = String::new();
     if failures.is_empty() {
-        return;
+        return output;
     }
 
-    println!("{}", format!("Failed ({}):", failures.len()).red().bold());
+    output.push_str(&format!(
+        "{}",
+        format!("Failed ({}):", failures.len()).red().bold()
+    ));
+    output.push('\n');
 
     for result in failures {
         if let UpdateOutcome::Failed(failure) = &result.outcome {
-            println!(
+            output.push_str(&format!(
                 "  {} {} {} in {}",
                 "FAIL".red().bold(),
                 result.path.display().to_string().white(),
                 format!("at {:?}: {}", failure.step, failure.error).red(),
                 format_duration(result.duration).dimmed(),
-            );
+            ));
+            output.push('\n');
         }
     }
-    println!();
+    output.push('\n');
+    output
 }
 
 fn format_step_message(step: &UpdateStep) -> &'static str {
@@ -544,8 +577,7 @@ mod tests {
 
     #[test]
     fn test_quiet_summary_format() {
-        // This is more of a smoke test - we can't easily test stderr output
-        // but we can ensure it doesn't panic with various inputs
+        colored::control::set_override(false);
         let success = UpdateResult {
             path: PathBuf::from("/test/success"),
             outcome: UpdateOutcome::Success(UpdateSuccess {
@@ -565,10 +597,129 @@ mod tests {
             duration: Duration::from_millis(500),
         };
 
-        // Should not panic
-        print_quiet_summary(std::slice::from_ref(&success));
-        print_quiet_summary(std::slice::from_ref(&failure));
-        print_quiet_summary(&[success, failure]);
-        print_quiet_summary(&[]);
+        let (stdout_line, stderr_lines) = build_quiet_summary(&[success.clone(), failure.clone()]);
+        assert_eq!(stdout_line, "1/2 repositories updated");
+        assert_eq!(stderr_lines.len(), 1);
+        assert!(stderr_lines[0].contains("/test/failure"));
+
+        let (stdout_line, stderr_lines) = build_quiet_summary(&[success]);
+        assert_eq!(stdout_line, "1/1 repositories updated");
+        assert!(stderr_lines.is_empty());
+    }
+
+    #[test]
+    fn test_print_summary_quiet_and_normal_modes() {
+        colored::control::set_override(false);
+        let success = UpdateResult {
+            path: PathBuf::from("/test/success"),
+            outcome: UpdateOutcome::Success(UpdateSuccess {
+                original_head: OriginalHead::Branch("main".to_string()),
+                master_branch: "main",
+                had_stash: false,
+            }),
+            duration: Duration::from_secs(1),
+        };
+
+        let failure = UpdateResult {
+            path: PathBuf::from("/test/failure"),
+            outcome: UpdateOutcome::Failed(UpdateFailure {
+                error: "test error".to_string(),
+                step: UpdateStep::Pulling,
+            }),
+            duration: Duration::from_millis(200),
+        };
+
+        let quiet_config = Config {
+            verbosity: crate::config::Verbosity::Quiet,
+        };
+        let normal_config = Config {
+            verbosity: crate::config::Verbosity::Normal,
+        };
+
+        let (stdout_line, stderr_lines) =
+            build_quiet_summary(&[success.clone(), failure.clone()]);
+        assert_eq!(stdout_line, "1/2 repositories updated");
+        assert_eq!(stderr_lines.len(), 1);
+
+        let output = build_normal_summary(&[success.clone(), failure.clone()], Duration::from_secs(2));
+        assert!(output.contains("Summary"));
+        assert!(output.contains("Total"));
+
+        print_summary(&[success.clone(), failure.clone()], Duration::from_secs(2), &quiet_config);
+        print_summary(&[success, failure], Duration::from_secs(2), &normal_config);
+    }
+
+    #[test]
+    fn test_build_normal_summary_golden_output() {
+        colored::control::set_override(false);
+        let success = UpdateResult {
+            path: PathBuf::from("/test/success"),
+            outcome: UpdateOutcome::Success(UpdateSuccess {
+                original_head: OriginalHead::Branch("feature".to_string()),
+                master_branch: "master",
+                had_stash: true,
+            }),
+            duration: Duration::from_secs(2),
+        };
+
+        let failure = UpdateResult {
+            path: PathBuf::from("/test/failure"),
+            outcome: UpdateOutcome::Failed(UpdateFailure {
+                error: "boom".to_string(),
+                step: UpdateStep::Fetching,
+            }),
+            duration: Duration::from_millis(500),
+        };
+
+        let output = build_normal_summary(&[success, failure], Duration::from_secs(3));
+        let expected = [
+            "",
+            "==================================================",
+            "                     Summary",
+            "==================================================",
+            "",
+            "Succeeded (1):",
+            "  OK /test/success [feature]  (stash restored) in 2.00s",
+            "",
+            "Failed (1):",
+            "  FAIL /test/failure at Fetching: boom in 0.50s",
+            "",
+            "Total: 1/2 repos in 3.00s",
+            "",
+        ]
+        .join("\n");
+
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn test_workspace_progress_mark_completed_smoke() {
+        let config = Config {
+            verbosity: crate::config::Verbosity::Normal,
+        };
+        let progress = create_workspace_progress(2, &config);
+        progress.mark_completed("repo-a", true);
+        progress.mark_completed("repo-b", false);
+        progress.finish();
+    }
+
+    #[test]
+    fn test_single_repo_progress_smoke() {
+        let normal_config = Config {
+            verbosity: crate::config::Verbosity::Normal,
+        };
+        let quiet_config = Config {
+            verbosity: crate::config::Verbosity::Quiet,
+        };
+
+        let normal_progress = create_single_repo_progress(&normal_config);
+        normal_progress.update(&UpdateStep::Fetching);
+        normal_progress.finish_success("repo-a");
+        normal_progress.finish_failed("repo-a", "error");
+
+        let quiet_progress = create_single_repo_progress(&quiet_config);
+        quiet_progress.update(&UpdateStep::Fetching);
+        quiet_progress.finish_success("repo-b");
+        quiet_progress.finish_failed("repo-b", "error");
     }
 }
