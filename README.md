@@ -1,5 +1,8 @@
 # git-daily-rust
 
+[![CI](https://github.com/Crhaj/git-daily-rust/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/Crhaj/git-daily-rust/actions/workflows/ci.yml)
+[![Codecov](https://codecov.io/gh/Crhaj/git-daily-rust/branch/master/graph/badge.svg)](https://codecov.io/gh/Crhaj/git-daily-rust)
+
 A fast CLI tool for keeping multiple git repositories up to date. Updates repositories by stashing local changes,
 fetching from remote, pulling the main branch, and restoring your previous state.
 
