@@ -45,7 +45,7 @@ pub fn run_git(repo: &Path, config: &Config, args: &[&str]) -> anyhow::Result<St
     run_git_with_logger(repo, config, args, no_op_logger)
 }
 
-/// Executes a git command with custom logging callback.
+/// Executes a git command with a custom logging callback.
 /// The logger is called once before execution (output=None) and once after (output=Some).
 pub fn run_git_with_logger(
     repo: &Path,
@@ -53,34 +53,14 @@ pub fn run_git_with_logger(
     args: &[&str],
     logger: GitLogger,
 ) -> anyhow::Result<String> {
-    logger(config, args, None);
-
-    let mut child = Command::new("git")
-        .current_dir(repo)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("Failed to spawn git command")?;
-
-    let result = wait_with_timeout(&mut child, constants::git_timeout());
-
-    match result {
-        Ok(output) => {
-            if output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                logger(config, args, Some(&stdout));
-                Ok(stdout)
-            } else {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                anyhow::bail!("git {} failed: {}", args.join(" "), stderr)
-            }
-        }
-        Err(e) => {
-            // Kill the process if it's still running after timeout
-            let _ = child.kill();
-            Err(e)
-        }
+    let output = run_git_output(repo, config, args, logger)?;
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        logger(config, args, Some(&stdout));
+        Ok(stdout)
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("git {} failed: {}", args.join(" "), stderr)
     }
 }
 
@@ -131,10 +111,7 @@ fn wait_with_timeout(
             Ok(None) => {
                 // Process still running
                 if start.elapsed() > timeout {
-                    anyhow::bail!(
-                        "git command timed out after {} seconds",
-                        timeout.as_secs()
-                    );
+                    anyhow::bail!("git command timed out after {} seconds", timeout.as_secs());
                 }
                 std::thread::sleep(poll_interval);
             }
@@ -143,17 +120,50 @@ fn wait_with_timeout(
     }
 }
 
-pub fn get_current_branch(repo: &Path, config: &Config, logger: GitLogger) -> anyhow::Result<String> {
+pub fn get_current_branch(
+    repo: &Path,
+    config: &Config,
+    logger: GitLogger,
+) -> anyhow::Result<String> {
     run_git_with_logger(repo, config, &["rev-parse", "--abbrev-ref", "HEAD"], logger)
         .context("Failed to get current branch")
 }
 
-pub fn get_current_commit(repo: &Path, config: &Config, logger: GitLogger) -> anyhow::Result<String> {
+pub fn get_current_commit(
+    repo: &Path,
+    config: &Config,
+    logger: GitLogger,
+) -> anyhow::Result<String> {
     run_git_with_logger(repo, config, &["rev-parse", "HEAD"], logger)
         .context("Failed to get current commit")
 }
 
-pub fn has_uncommitted_changes(repo: &Path, config: &Config, logger: GitLogger) -> anyhow::Result<bool> {
+/// Returns true if the remote tracking ref exists.
+///
+/// `remote_ref` must be in `<remote>/<branch>` form (for example, `origin/feature-x`),
+/// not a full `refs/remotes/...` path.
+pub fn remote_ref_exists(
+    repo: &Path,
+    config: &Config,
+    remote_ref: &str,
+    logger: GitLogger,
+) -> anyhow::Result<bool> {
+    validate_remote_ref(remote_ref)?;
+    let ref_path = format!("refs/remotes/{}", remote_ref);
+    let output = run_git_output(
+        repo,
+        config,
+        &["rev-parse", "--verify", ref_path.as_str()],
+        logger,
+    )?;
+    Ok(output.status.success())
+}
+
+pub fn has_uncommitted_changes(
+    repo: &Path,
+    config: &Config,
+    logger: GitLogger,
+) -> anyhow::Result<bool> {
     run_git_with_logger(repo, config, &["status", "--porcelain"], logger)
         .map(|output| !output.is_empty())
         .context("Failed to check for uncommitted changes")
@@ -166,18 +176,22 @@ pub fn fetch_prune(repo: &Path, config: &Config, logger: GitLogger) -> anyhow::R
 }
 
 pub fn stash(repo: &Path, config: &Config, logger: GitLogger) -> anyhow::Result<bool> {
-    let output = run_git_with_logger(repo, config, &["stash"], logger)
-        .context("Failed to stash changes")?;
+    let output =
+        run_git_with_logger(repo, config, &["stash"], logger).context("Failed to stash changes")?;
     Ok(!output.contains("No local changes to save"))
 }
 
 pub fn stash_pop(repo: &Path, config: &Config, logger: GitLogger) -> anyhow::Result<()> {
-    run_git_with_logger(repo, config, &["stash", "pop"], logger)
-        .context("Failed to pop stash")?;
+    run_git_with_logger(repo, config, &["stash", "pop"], logger).context("Failed to pop stash")?;
     Ok(())
 }
 
-pub fn checkout(repo: &Path, config: &Config, branch: &str, logger: GitLogger) -> anyhow::Result<()> {
+pub fn checkout(
+    repo: &Path,
+    config: &Config,
+    branch: &str,
+    logger: GitLogger,
+) -> anyhow::Result<()> {
     validate_branch_name(branch)?;
     run_git_with_logger(repo, config, &["checkout", branch], logger)
         .with_context(|| format!("Failed to checkout branch '{}'", branch))?;
@@ -186,9 +200,150 @@ pub fn checkout(repo: &Path, config: &Config, branch: &str, logger: GitLogger) -
 
 pub fn pull(repo: &Path, config: &Config, branch: &str, logger: GitLogger) -> anyhow::Result<()> {
     validate_branch_name(branch)?;
-    run_git_with_logger(repo, config, &["pull", "--ff-only", "origin", branch], logger)
-        .with_context(|| format!("Failed to pull '{}' from origin", branch))?;
+    run_git_with_logger(
+        repo,
+        config,
+        &["pull", "--ff-only", "origin", branch],
+        logger,
+    )
+    .with_context(|| format!("Failed to pull '{}' from origin", branch))?;
     Ok(())
+}
+
+/// Lists local branches with their upstream tracking refs.
+pub fn list_branches_with_upstream(
+    repo: &Path,
+    config: &Config,
+    logger: GitLogger,
+) -> anyhow::Result<String> {
+    run_git_with_logger(
+        repo,
+        config,
+        &[
+            "for-each-ref",
+            "--format=%(refname:short)|%(upstream:short)",
+            "refs/heads/",
+        ],
+        logger,
+    )
+    .context("Failed to get branch names with upstream info")
+}
+
+/// Deletes a local branch safely (fails if not fully merged).
+pub fn delete_branch(
+    repo: &Path,
+    config: &Config,
+    name: &str,
+    logger: GitLogger,
+) -> anyhow::Result<()> {
+    validate_branch_name(name)?;
+    run_git_with_logger(repo, config, &["branch", "-d", name], logger)
+        .with_context(|| format!("Failed to delete branch '{}'", name))?;
+    Ok(())
+}
+
+/// Force deletes a local branch.
+pub fn delete_branch_force(
+    repo: &Path,
+    config: &Config,
+    name: &str,
+    logger: GitLogger,
+) -> anyhow::Result<()> {
+    validate_branch_name(name)?;
+    run_git_with_logger(repo, config, &["branch", "-D", name], logger)
+        .with_context(|| format!("Failed to force delete branch '{}'", name))?;
+    Ok(())
+}
+
+/// Lists local branches merged into the specified target branch.
+pub fn list_merged_branches(
+    repo: &Path,
+    config: &Config,
+    target: &str,
+    logger: GitLogger,
+) -> anyhow::Result<String> {
+    validate_branch_name(target)?;
+    run_git_with_logger(repo, config, &["branch", "--merged", target], logger)
+        .with_context(|| format!("Failed to list branches merged into '{}'", target))
+}
+
+/// Returns the merge-base SHA between two refs.
+pub fn merge_base(
+    repo: &Path,
+    config: &Config,
+    ref1: &str,
+    ref2: &str,
+    logger: GitLogger,
+) -> anyhow::Result<String> {
+    run_git_with_logger(repo, config, &["merge-base", ref1, ref2], logger)
+        .with_context(|| format!("Failed to run merge-base for '{}' and '{}'", ref1, ref2))
+}
+
+/// Returns the merge-tree output for the two refs and a common base.
+pub fn merge_tree(
+    repo: &Path,
+    config: &Config,
+    base: &str,
+    branch1: &str,
+    branch2: &str,
+    logger: GitLogger,
+) -> anyhow::Result<String> {
+    validate_branch_name(branch1)?;
+    validate_branch_name(branch2)?;
+    run_git_with_logger(
+        repo,
+        config,
+        &["merge-tree", base, branch1, branch2],
+        logger,
+    )
+    .with_context(|| {
+        format!(
+            "Failed to run merge-tree on base: '{}' for branch '{}' and '{}'",
+            base, branch1, branch2
+        )
+    })
+}
+
+/// Executes a git command and returns the raw output without interpreting exit status.
+fn run_git_output(
+    repo: &Path,
+    config: &Config,
+    args: &[&str],
+    logger: GitLogger,
+) -> anyhow::Result<std::process::Output> {
+    logger(config, args, None);
+
+    let mut child = Command::new("git")
+        .current_dir(repo)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("Failed to spawn git command")?;
+
+    let result = wait_with_timeout(&mut child, constants::git_timeout());
+
+    match result {
+        Ok(output) => Ok(output),
+        Err(e) => {
+            // Kill the process if it's still running after timeout
+            let _ = child.kill();
+            Err(e)
+        }
+    }
+}
+
+fn validate_remote_ref(remote_ref: &str) -> anyhow::Result<()> {
+    if remote_ref.is_empty() {
+        anyhow::bail!("Remote ref cannot be empty");
+    }
+    if remote_ref.starts_with("refs/") {
+        anyhow::bail!("Remote ref must be in '<remote>/<branch>' form");
+    }
+    if !remote_ref.contains('/') {
+        anyhow::bail!("Remote ref must include a remote name, e.g. 'origin/branch'");
+    }
+    validate_branch_name(remote_ref)
 }
 
 /// Validates branch name to prevent command and argument injection.
@@ -258,12 +413,7 @@ mod tests {
 
     #[test]
     fn test_validate_branch_name_rejects_argument_injection() {
-        let arg_injections = [
-            "-exec=malicious",
-            "--exec=evil",
-            "-branch",
-            "--help",
-        ];
+        let arg_injections = ["-exec=malicious", "--exec=evil", "-branch", "--help"];
 
         for name in arg_injections {
             let result = validate_branch_name(name);
@@ -272,7 +422,12 @@ mod tests {
                 "Expected '{}' to be rejected but it was accepted",
                 name
             );
-            assert!(result.unwrap_err().to_string().contains("cannot start with '-'"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("cannot start with '-'")
+            );
         }
     }
 
@@ -281,5 +436,37 @@ mod tests {
         // Git supports unicode in branch names
         assert!(validate_branch_name("feature/新機能").is_ok());
         assert!(validate_branch_name("branch-émoji-🎉").is_ok());
+    }
+
+    #[test]
+    fn test_validate_remote_ref_accepts_remote_branch() {
+        assert!(validate_remote_ref("origin/feature-x").is_ok());
+        assert!(validate_remote_ref("upstream/main").is_ok());
+    }
+
+    #[test]
+    fn test_validate_remote_ref_rejects_empty() {
+        let result = validate_remote_ref("");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("empty"));
+    }
+
+    #[test]
+    fn test_validate_remote_ref_rejects_full_ref_path() {
+        let result = validate_remote_ref("refs/remotes/origin/feature-x");
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("'<remote>/<branch>'")
+        );
+    }
+
+    #[test]
+    fn test_validate_remote_ref_rejects_missing_remote() {
+        let result = validate_remote_ref("feature-x");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("remote name"));
     }
 }
