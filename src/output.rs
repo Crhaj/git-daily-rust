@@ -605,6 +605,10 @@ mod tests {
         let (stdout_line, stderr_lines) = build_quiet_summary(&[success]);
         assert_eq!(stdout_line, "1/1 repositories updated");
         assert!(stderr_lines.is_empty());
+
+        let (stdout_line, stderr_lines) = build_quiet_summary(&[]);
+        assert_eq!(stdout_line, "0/0 repositories updated");
+        assert!(stderr_lines.is_empty());
     }
 
     #[test]
@@ -651,6 +655,41 @@ mod tests {
             &quiet_config,
         );
         print_summary(&[success, failure], Duration::from_secs(2), &normal_config);
+    }
+
+    #[test]
+    fn test_build_normal_summary_success_only() {
+        colored::control::set_override(false);
+        let success = UpdateResult {
+            path: PathBuf::from("/test/success"),
+            outcome: UpdateOutcome::Success(UpdateSuccess {
+                original_head: OriginalHead::Branch("main".to_string()),
+                master_branch: "main",
+                had_stash: false,
+            }),
+            duration: Duration::from_secs(1),
+        };
+
+        let output = build_normal_summary(&[success], Duration::from_secs(1));
+        assert!(output.contains("Succeeded (1):"));
+        assert!(!output.contains("Failed ("));
+    }
+
+    #[test]
+    fn test_build_normal_summary_failure_only() {
+        colored::control::set_override(false);
+        let failure = UpdateResult {
+            path: PathBuf::from("/test/failure"),
+            outcome: UpdateOutcome::Failed(UpdateFailure {
+                error: "boom".to_string(),
+                step: UpdateStep::Fetching,
+            }),
+            duration: Duration::from_secs(1),
+        };
+
+        let output = build_normal_summary(&[failure], Duration::from_secs(1));
+        assert!(output.contains("Failed (1):"));
+        assert!(!output.contains("Succeeded ("));
     }
 
     #[test]

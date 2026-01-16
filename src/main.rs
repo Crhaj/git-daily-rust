@@ -138,6 +138,18 @@ mod tests {
     }
 
     #[test]
+    fn test_args_rejects_conflicting_flags() {
+        let result = Args::try_parse_from(["git-daily-v2", "--quiet", "--verbose"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_args_rejects_unknown_flag() {
+        let result = Args::try_parse_from(["git-daily-v2", "--nope"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn test_compute_exit_code_all_success() {
         let results = vec![UpdateResult {
             path: PathBuf::from("/repo"),

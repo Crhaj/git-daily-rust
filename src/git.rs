@@ -343,6 +343,9 @@ fn validate_remote_ref(remote_ref: &str) -> anyhow::Result<()> {
     if !remote_ref.contains('/') {
         anyhow::bail!("Remote ref must include a remote name, e.g. 'origin/branch'");
     }
+    if remote_ref.starts_with('/') || remote_ref.ends_with('/') {
+        anyhow::bail!("Remote ref must be in '<remote>/<branch>' form");
+    }
     validate_branch_name(remote_ref)
 }
 
@@ -468,5 +471,17 @@ mod tests {
         let result = validate_remote_ref("feature-x");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("remote name"));
+    }
+
+    #[test]
+    fn test_validate_remote_ref_rejects_empty_branch() {
+        let result = validate_remote_ref("origin/");
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("'<remote>/<branch>'")
+        );
     }
 }

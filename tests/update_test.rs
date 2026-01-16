@@ -193,6 +193,58 @@ fn test_update_handles_detached_head() -> anyhow::Result<()> {
 }
 
 #[test]
+fn test_update_clean_repo_reports_no_stash() -> anyhow::Result<()> {
+    let config = test_config();
+    let repo = TestRepo::with_remote(None)?;
+
+    let result = repo::update(repo.path(), &NoOpCallbacks, &config);
+    match result.outcome {
+        UpdateOutcome::Success(success) => {
+            assert!(!success.had_stash);
+        }
+        UpdateOutcome::Failed(failure) => anyhow::bail!("update failed: {}", failure.error),
+    }
+    Ok(())
+}
+
+#[test]
+fn test_update_fails_when_no_master_or_main() -> anyhow::Result<()> {
+    let config = test_config();
+    let workspace = TempDir::new()?;
+    let repo_path = workspace.path().join("dev-repo");
+    let remote_path = workspace.path().join("dev-remote");
+
+    std::fs::create_dir_all(&repo_path)?;
+    std::fs::create_dir_all(&remote_path)?;
+    git::run_git(&remote_path, &config, &["init", "--bare"])?;
+    git::run_git(&repo_path, &config, &["init", "-b", "dev"])?;
+    git::run_git(
+        &repo_path,
+        &config,
+        &["config", "user.email", "test@example.com"],
+    )?;
+    git::run_git(&repo_path, &config, &["config", "user.name", "Test User"])?;
+    std::fs::write(repo_path.join("README.md"), "# Test Repo\n")?;
+    git::run_git(&repo_path, &config, &["add", "README.md"])?;
+    git::run_git(&repo_path, &config, &["commit", "-m", "Initial commit"])?;
+    git::run_git(
+        &repo_path,
+        &config,
+        &["remote", "add", "origin", remote_path.to_str().unwrap()],
+    )?;
+    git::run_git(&repo_path, &config, &["push", "-u", "origin", "dev"])?;
+
+    let result = repo::update(&repo_path, &NoOpCallbacks, &config);
+    match result.outcome {
+        UpdateOutcome::Failed(failure) => {
+            assert_eq!(failure.step, UpdateStep::CheckingOut);
+        }
+        UpdateOutcome::Success(_) => anyhow::bail!("expected update to fail without master/main"),
+    }
+    Ok(())
+}
+
+#[test]
 fn test_update_handles_empty_repo() -> anyhow::Result<()> {
     let config = test_config();
     let workspace = TempDir::new()?;
