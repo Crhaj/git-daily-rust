@@ -636,16 +636,20 @@ mod tests {
             verbosity: crate::config::Verbosity::Normal,
         };
 
-        let (stdout_line, stderr_lines) =
-            build_quiet_summary(&[success.clone(), failure.clone()]);
+        let (stdout_line, stderr_lines) = build_quiet_summary(&[success.clone(), failure.clone()]);
         assert_eq!(stdout_line, "1/2 repositories updated");
         assert_eq!(stderr_lines.len(), 1);
 
-        let output = build_normal_summary(&[success.clone(), failure.clone()], Duration::from_secs(2));
+        let output =
+            build_normal_summary(&[success.clone(), failure.clone()], Duration::from_secs(2));
         assert!(output.contains("Summary"));
         assert!(output.contains("Total"));
 
-        print_summary(&[success.clone(), failure.clone()], Duration::from_secs(2), &quiet_config);
+        print_summary(
+            &[success.clone(), failure.clone()],
+            Duration::from_secs(2),
+            &quiet_config,
+        );
         print_summary(&[success, failure], Duration::from_secs(2), &normal_config);
     }
 

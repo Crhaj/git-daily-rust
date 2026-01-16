@@ -1,10 +1,10 @@
 mod common;
 
+use common::{TestRepo, test_config};
 use git_daily_rust::git::{self, no_op_logger};
 use git_daily_rust::output::NoOpCallbacks;
 use git_daily_rust::repo::{self, OriginalHead, UpdateOutcome, UpdateStep};
 use tempfile::TempDir;
-use common::{TestRepo, test_config};
 
 /// Shorthand for the test logger (no-op for tests)
 fn logger() -> git::GitLogger {
@@ -31,12 +31,20 @@ fn test_update_stashes_and_restores_uncommitted_changes() -> anyhow::Result<()> 
     let config = test_config();
     let repo = TestRepo::with_remote(None)?;
     repo.make_dirty()?;
-    assert!(git::has_uncommitted_changes(repo.path(), &config, logger())?);
+    assert!(git::has_uncommitted_changes(
+        repo.path(),
+        &config,
+        logger()
+    )?);
 
     let result = repo::update(repo.path(), &NoOpCallbacks, &config);
 
     assert!(matches!(result.outcome, UpdateOutcome::Success(_)));
-    assert!(git::has_uncommitted_changes(repo.path(), &config, logger())?);
+    assert!(git::has_uncommitted_changes(
+        repo.path(),
+        &config,
+        logger()
+    )?);
     assert!(!repo.has_stash()?);
     Ok(())
 }
@@ -47,13 +55,21 @@ fn test_update_untracked_only_no_pop() -> anyhow::Result<()> {
     let repo = TestRepo::with_remote(None)?;
     repo.make_untracked()?;
     assert!(!repo.has_stash()?);
-    assert!(git::has_uncommitted_changes(repo.path(), &config, logger())?);
+    assert!(git::has_uncommitted_changes(
+        repo.path(),
+        &config,
+        logger()
+    )?);
 
     let result = repo::update(repo.path(), &NoOpCallbacks, &config);
 
     assert!(matches!(result.outcome, UpdateOutcome::Success(_)));
     assert!(!repo.has_stash()?);
-    assert!(git::has_uncommitted_changes(repo.path(), &config, logger())?);
+    assert!(git::has_uncommitted_changes(
+        repo.path(),
+        &config,
+        logger()
+    )?);
     Ok(())
 }
 
@@ -84,7 +100,10 @@ fn test_update_falls_back_to_main_when_no_master_branch() -> anyhow::Result<()> 
     match result.outcome {
         UpdateOutcome::Success(success) => {
             assert_eq!(success.master_branch, "main");
-            assert_eq!(success.original_head, OriginalHead::Branch("feature".to_string()));
+            assert_eq!(
+                success.original_head,
+                OriginalHead::Branch("feature".to_string())
+            );
         }
         UpdateOutcome::Failed(failure) => anyhow::bail!("update failed: {}", failure.error),
     }
@@ -130,7 +149,10 @@ fn test_update_is_idempotent() -> anyhow::Result<()> {
     let result2 = repo::update(repo.path(), &NoOpCallbacks, &config);
     assert!(matches!(result2.outcome, UpdateOutcome::Success(_)));
 
-    assert_eq!(git::get_current_branch(repo.path(), &config, logger())?, "feature");
+    assert_eq!(
+        git::get_current_branch(repo.path(), &config, logger())?,
+        "feature"
+    );
     Ok(())
 }
 
@@ -149,7 +171,10 @@ fn test_update_handles_detached_head() -> anyhow::Result<()> {
 
     match &result.outcome {
         UpdateOutcome::Success(success) => {
-            assert!(success.original_head.is_detached(), "Expected detached HEAD state");
+            assert!(
+                success.original_head.is_detached(),
+                "Expected detached HEAD state"
+            );
             assert_eq!(
                 success.original_head,
                 OriginalHead::DetachedAt(original_commit.clone()),
@@ -180,11 +205,7 @@ fn test_update_handles_empty_repo() -> anyhow::Result<()> {
         &config,
         &["config", "user.email", "test@example.com"],
     )?;
-    git::run_git(
-        &repo_path,
-        &config,
-        &["config", "user.name", "Test User"],
-    )?;
+    git::run_git(&repo_path, &config, &["config", "user.name", "Test User"])?;
 
     let result = repo::update(&repo_path, &NoOpCallbacks, &config);
     match result.outcome {

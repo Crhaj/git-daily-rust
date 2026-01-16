@@ -1,11 +1,11 @@
 mod common;
 
+use common::{CountingCallbacks, init_repo, setup_workspace_with_repos, test_config};
 use git_daily_rust::git;
 use git_daily_rust::output::NoOpCallbacks;
 use git_daily_rust::repo::{self, UpdateOutcome};
-use tempfile::TempDir;
 use std::collections::HashSet;
-use common::{CountingCallbacks, init_repo, setup_workspace_with_repos, test_config};
+use tempfile::TempDir;
 
 #[test]
 fn test_update_workspace_updates_multiple_repos() -> anyhow::Result<()> {
@@ -24,17 +24,32 @@ fn test_update_workspace_updates_multiple_repos() -> anyhow::Result<()> {
 fn test_workspace_mixed_success_and_failure() -> anyhow::Result<()> {
     let config = test_config();
     let workspace = TempDir::new()?;
-    setup_workspace_with_repos(&workspace, &[("repo-ok", "master"), ("repo-fail", "master")])?;
+    setup_workspace_with_repos(
+        &workspace,
+        &[("repo-ok", "master"), ("repo-fail", "master")],
+    )?;
 
     let broken_path = workspace.path().join("repo-fail");
-    git::run_git(&broken_path, &config, &["remote", "set-url", "origin", "/nope"])?;
+    git::run_git(
+        &broken_path,
+        &config,
+        &["remote", "set-url", "origin", "/nope"],
+    )?;
 
     let repos = repo::find_git_repos(workspace.path());
     let results = repo::update_workspace(&repos, |_| NoOpCallbacks, &config);
 
     assert_eq!(results.len(), 2);
-    assert!(results.iter().any(|r| matches!(r.outcome, UpdateOutcome::Failed(_))));
-    assert!(results.iter().any(|r| matches!(r.outcome, UpdateOutcome::Success(_))));
+    assert!(
+        results
+            .iter()
+            .any(|r| matches!(r.outcome, UpdateOutcome::Failed(_)))
+    );
+    assert!(
+        results
+            .iter()
+            .any(|r| matches!(r.outcome, UpdateOutcome::Success(_)))
+    );
     Ok(())
 }
 
@@ -67,10 +82,7 @@ fn test_workspace_callbacks_called_for_each_repo() -> anyhow::Result<()> {
 
     assert_eq!(results.len(), 2);
     assert!(step_count.load(std::sync::atomic::Ordering::SeqCst) > 0);
-    assert_eq!(
-        complete_count.load(std::sync::atomic::Ordering::SeqCst),
-        2
-    );
+    assert_eq!(complete_count.load(std::sync::atomic::Ordering::SeqCst), 2);
     Ok(())
 }
 

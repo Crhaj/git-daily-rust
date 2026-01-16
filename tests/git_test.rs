@@ -1,8 +1,8 @@
 mod common;
 
+use common::{TestRepo, test_config};
 use git_daily_rust::git::{self, no_op_logger};
 use tempfile::TempDir;
-use common::{TestRepo, test_config};
 
 /// Shorthand for the test logger (no-op for tests)
 fn logger() -> git::GitLogger {
@@ -46,9 +46,17 @@ fn test_create_branch() -> anyhow::Result<()> {
 fn test_make_dirty() -> anyhow::Result<()> {
     let config = test_config();
     let repo = TestRepo::new()?;
-    assert!(!git::has_uncommitted_changes(repo.path(), &config, logger())?);
+    assert!(!git::has_uncommitted_changes(
+        repo.path(),
+        &config,
+        logger()
+    )?);
     repo.make_dirty()?;
-    assert!(git::has_uncommitted_changes(repo.path(), &config, logger())?);
+    assert!(git::has_uncommitted_changes(
+        repo.path(),
+        &config,
+        logger()
+    )?);
     Ok(())
 }
 
@@ -59,7 +67,11 @@ fn test_make_untracked() -> anyhow::Result<()> {
     assert!(!repo.file_exists("untracked.txt"));
     repo.make_untracked()?;
     assert!(repo.file_exists("untracked.txt"));
-    assert!(git::has_uncommitted_changes(repo.path(), &config, logger())?);
+    assert!(git::has_uncommitted_changes(
+        repo.path(),
+        &config,
+        logger()
+    )?);
     Ok(())
 }
 
@@ -135,7 +147,14 @@ fn test_merge_base_and_merge_tree() -> anyhow::Result<()> {
     let merge_base = git::merge_base(repo.path(), &config, "master", "feature", logger())?;
     assert_eq!(merge_base, base_commit);
 
-    let output = git::merge_tree(repo.path(), &config, &merge_base, "master", "feature", logger())?;
+    let output = git::merge_tree(
+        repo.path(),
+        &config,
+        &merge_base,
+        "master",
+        "feature",
+        logger(),
+    )?;
     assert!(!output.trim().is_empty());
     Ok(())
 }
@@ -186,7 +205,12 @@ fn test_remote_ref_exists_with_non_origin_remote() -> anyhow::Result<()> {
     git::run_git(
         repo.path(),
         &config,
-        &["remote", "add", "upstream", upstream.path().to_str().unwrap()],
+        &[
+            "remote",
+            "add",
+            "upstream",
+            upstream.path().to_str().unwrap(),
+        ],
     )?;
     git::run_git(repo.path(), &config, &["push", "-u", "upstream", "master"])?;
 
