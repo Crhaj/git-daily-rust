@@ -805,6 +805,137 @@ mod tests {
     }
 
     #[test]
+    fn test_print_repo_header_step_and_completion_verbose_only() {
+        colored::control::set_override(false);
+        let verbose = Config {
+            verbosity: crate::config::Verbosity::Verbose,
+        };
+        let normal = Config {
+            verbosity: crate::config::Verbosity::Normal,
+        };
+
+        print_repo_header(&normal, "repo-a");
+        print_step(&normal, &UpdateStep::Fetching);
+        print_completion_status(&normal, true, None);
+
+        print_repo_header(&verbose, "repo-a");
+        print_step(&verbose, &UpdateStep::Fetching);
+        print_completion_status(&verbose, true, None);
+        print_completion_status(&verbose, false, Some("boom"));
+    }
+
+    #[test]
+    fn test_print_working_dir_and_workspace_start_quiet_and_normal() {
+        colored::control::set_override(false);
+        let quiet = Config {
+            verbosity: crate::config::Verbosity::Quiet,
+        };
+        let normal = Config {
+            verbosity: crate::config::Verbosity::Normal,
+        };
+
+        print_working_dir(Path::new("/tmp/repo"), &quiet);
+        print_working_dir(Path::new("/tmp/repo"), &normal);
+
+        print_workspace_start(0, &quiet);
+        print_workspace_start(0, &normal);
+        print_workspace_start(2, &normal);
+    }
+
+    #[test]
+    fn test_single_repo_callbacks_finish_and_steps() {
+        colored::control::set_override(false);
+        let config = Config {
+            verbosity: crate::config::Verbosity::Normal,
+        };
+        let progress = create_single_repo_progress(&config);
+        let callbacks = SingleRepoCallbacks::new(progress, config);
+
+        let success = UpdateResult {
+            path: PathBuf::from("/test/success"),
+            outcome: UpdateOutcome::Success(UpdateSuccess {
+                original_head: OriginalHead::Branch("main".to_string()),
+                master_branch: "main",
+                had_stash: false,
+            }),
+            duration: Duration::from_secs(1),
+        };
+        callbacks.on_update_start("repo-a");
+        callbacks.on_step(&UpdateStep::Started);
+        callbacks.on_step_execute(&UpdateStep::Fetching);
+        callbacks.on_completion_status(true, None);
+        callbacks.on_complete(&success);
+        callbacks.finish(&success);
+
+        let failure = UpdateResult {
+            path: PathBuf::from("/test/failure"),
+            outcome: UpdateOutcome::Failed(UpdateFailure {
+                error: "boom".to_string(),
+                step: UpdateStep::Fetching,
+            }),
+            duration: Duration::from_secs(1),
+        };
+        callbacks.on_completion_status(false, Some("boom"));
+        callbacks.on_complete(&failure);
+        callbacks.finish(&failure);
+    }
+
+    #[test]
+    fn test_workspace_progress_tracker_and_capacity() {
+        colored::control::set_override(false);
+        let config = Config {
+            verbosity: crate::config::Verbosity::Normal,
+        };
+        let progress = create_workspace_progress(MAX_VISIBLE_COMPLETIONS + 2, &config);
+        let tracker = progress.create_repo_tracker("repo-a", config);
+
+        for i in 0..(MAX_VISIBLE_COMPLETIONS + 2) {
+            let result = UpdateResult {
+                path: PathBuf::from(format!("/tmp/repo-{}", i)),
+                outcome: UpdateOutcome::Success(UpdateSuccess {
+                    original_head: OriginalHead::Branch("main".to_string()),
+                    master_branch: "main",
+                    had_stash: false,
+                }),
+                duration: Duration::from_secs(1),
+            };
+            tracker.on_complete(&result);
+        }
+
+        {
+            let state = progress
+                .state
+                .lock()
+                .expect("WorkspaceProgress state mutex poisoned");
+            assert_eq!(state.repos.len(), MAX_VISIBLE_COMPLETIONS);
+        }
+
+        progress.finish();
+    }
+
+    #[test]
+    fn test_workspace_progress_hidden_when_quiet() {
+        colored::control::set_override(false);
+        let quiet = Config {
+            verbosity: crate::config::Verbosity::Quiet,
+        };
+        let progress = create_workspace_progress(1, &quiet);
+        let tracker = progress.create_repo_tracker("repo-a", quiet);
+
+        let result = UpdateResult {
+            path: PathBuf::from("/tmp/repo"),
+            outcome: UpdateOutcome::Success(UpdateSuccess {
+                original_head: OriginalHead::Branch("main".to_string()),
+                master_branch: "main",
+                had_stash: false,
+            }),
+            duration: Duration::from_secs(1),
+        };
+        tracker.on_complete(&result);
+        progress.finish();
+    }
+
+    #[test]
     fn test_workspace_progress_mark_completed_smoke() {
         let config = Config {
             verbosity: crate::config::Verbosity::Normal,

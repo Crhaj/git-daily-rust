@@ -532,6 +532,16 @@ mod tests {
         assert!(lines.is_empty());
     }
 
+    #[test]
+    fn test_verbose_logger_noop_when_not_verbose() {
+        colored::control::set_override(false);
+        let config = Config {
+            verbosity: crate::config::Verbosity::Normal,
+        };
+        verbose_logger(&config, &["status"], None);
+        verbose_logger(&config, &["status"], Some("output"));
+    }
+
     struct FakeChild {
         try_wait: Option<io::Result<Option<std::process::ExitStatus>>>,
         stdout: Vec<u8>,
