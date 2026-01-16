@@ -1,0 +1,15 @@
+comment:
+  layout: "header, diff, files"
+  require_changes: true
+  behavior: default
+
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 1%
+    patch:
+      default:
+        target: auto
+        threshold: 1%
