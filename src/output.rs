@@ -3,6 +3,9 @@
 //! This module provides visual feedback during repository updates including
 //! spinners, progress bars, and colored summary output.
 
+use crate::cleanup::{
+    BranchInfo, CleanupResult, DeletionOutcome, DeletionResult, MergeStatus, TrackingStatus,
+};
 use crate::config::Config;
 use crate::constants::{DEFAULT_REPO_NAME, MAX_VISIBLE_COMPLETIONS, PROGRESS_TICK_MS};
 use crate::repo::{UpdateCallbacks, UpdateOutcome, UpdateResult, UpdateStep};
@@ -520,6 +523,380 @@ fn format_step_message(step: &UpdateStep) -> &'static str {
     }
 }
 
+/// Width of the summary box divider line.
+const SUMMARY_BOX_WIDTH: usize = 60;
+
+/// Column widths for aligned branch list display.
+///
+/// Use [`BranchListWidths::from_branches`] to calculate optimal widths
+/// based on the actual branch names in your list.
+#[derive(Debug, Clone, Copy)]
+pub struct BranchListWidths {
+    name: usize,
+    status: usize,
+    remote: usize,
+}
+
+impl BranchListWidths {
+    const MIN_NAME_WIDTH: usize = 6;
+    const MAX_NAME_WIDTH: usize = 60;
+    const STATUS_WIDTH: usize = 16; // "(current branch)" is 16 chars
+    const REMOTE_WIDTH: usize = 7; // "unknown" is 7 chars
+
+    /// Calculates optimal column widths based on branch data.
+    ///
+    /// Name width is clamped between `MIN_NAME_WIDTH` (6) and `MAX_NAME_WIDTH` (60)
+    /// to ensure readable output even with very long branch names.
+    #[must_use]
+    pub fn from_branches(branches: &[BranchInfo]) -> Self {
+        let max_name = branches
+            .iter()
+            .map(|b| b.name.len())
+            .max()
+            .unwrap_or(Self::MIN_NAME_WIDTH)
+            .clamp(Self::MIN_NAME_WIDTH, Self::MAX_NAME_WIDTH);
+
+        Self {
+            name: max_name,
+            status: Self::STATUS_WIDTH,
+            remote: Self::REMOTE_WIDTH,
+        }
+    }
+
+    fn total_width(&self) -> usize {
+        self.name + self.status + self.remote + 4 // 4 for spacing between columns
+    }
+}
+
+/// Formats a single branch line for display.
+///
+/// The output includes the branch name, merge status, and tracking status
+/// with appropriate coloring based on safety.
+///
+/// # Example
+///
+/// ```
+/// use git_daily_rust::cleanup::{BranchInfo, MergeStatus, TrackingStatus};
+/// use git_daily_rust::output::{BranchListWidths, format_branch_line};
+///
+/// let branch = BranchInfo {
+///     name: "feature/login".to_string(),
+///     is_current: false,
+///     merge_status: MergeStatus::Merged,
+///     tracking_status: TrackingStatus::RemoteGone,
+/// };
+/// let widths = BranchListWidths::from_branches(&[branch.clone()]);
+/// let line = format_branch_line(&branch, &widths);
+/// assert!(line.contains("feature/login"));
+/// ```
+#[must_use]
+pub fn format_branch_line(branch: &BranchInfo, widths: &BranchListWidths) -> String {
+    let prefix = if branch.is_current { "*" } else { " " };
+    let name = &branch.name;
+    let status = format_branch_status(branch);
+    let remote = format_tracking_status(&branch.tracking_status);
+    let warning = format_branch_warning(branch);
+
+    format!(
+        "{} {:<name_width$}  {:<status_width$}  {}{}",
+        prefix,
+        name,
+        status,
+        remote,
+        warning,
+        name_width = widths.name,
+        status_width = widths.status,
+    )
+}
+
+/// Prints the header for the branch list.
+pub fn print_branch_list_header(widths: &BranchListWidths, config: &Config) {
+    if config.is_quiet() {
+        return;
+    }
+    let header = build_branch_list_header(widths);
+    eprintln!("{}", header);
+}
+
+/// Prints the complete branch list with header.
+pub fn print_branch_list(branches: &[BranchInfo], config: &Config) {
+    if config.is_quiet() {
+        return;
+    }
+
+    let widths = BranchListWidths::from_branches(branches);
+    print_branch_list_header(&widths, config);
+
+    for branch in branches {
+        eprintln!("{}", format_branch_line(branch, &widths));
+    }
+}
+
+/// Prints a single deletion result (real-time feedback during deletion).
+pub fn print_deletion_result(result: &DeletionResult, config: &Config) {
+    if config.is_quiet() {
+        return;
+    }
+    let line = build_deletion_result_line(result);
+    eprintln!("{}", line);
+}
+
+/// Prints the final cleanup summary.
+pub fn print_cleanup_summary(result: &CleanupResult, remaining: &[BranchInfo], config: &Config) {
+    if config.is_quiet() {
+        print_quiet_cleanup_summary(result);
+    } else {
+        print_normal_cleanup_summary(result, remaining);
+    }
+}
+
+/// Prints the "Analyzing branches..." message.
+pub fn print_analyzing_branches(config: &Config) {
+    if config.is_quiet() {
+        return;
+    }
+    eprintln!("{}", "Analyzing branches...".dimmed());
+}
+
+/// Prints "No branches available for cleanup" message.
+pub fn print_no_branches_to_clean(config: &Config) {
+    if config.is_quiet() {
+        return;
+    }
+    eprintln!("{}", "No branches available for cleanup.".yellow().bold());
+    eprintln!(
+        "{}",
+        "All branches are either current or protected.".dimmed()
+    );
+}
+
+/// Prints "Deleting branches..." header.
+pub fn print_deleting_header(config: &Config) {
+    if config.is_quiet() {
+        return;
+    }
+    eprintln!("\n{}", "Deleting branches...".cyan());
+}
+
+fn format_branch_status(branch: &BranchInfo) -> String {
+    if branch.is_current {
+        "(current branch)".cyan().to_string()
+    } else {
+        format_merge_status(&branch.merge_status)
+    }
+}
+
+/// Formats merge status with semantic color coding.
+/// Uses semantic methods to avoid duplicating variant knowledge.
+fn format_merge_status(status: &MergeStatus) -> String {
+    let label = status.to_string();
+    if status.is_safely_deletable() {
+        label.green().to_string()
+    } else if status.requires_caution() {
+        label.yellow().to_string()
+    } else {
+        // Uncertain status (unclear)
+        label.magenta().to_string()
+    }
+}
+
+/// Formats tracking status with semantic color coding.
+/// Active remotes are normal, inactive are dimmed.
+fn format_tracking_status(status: &TrackingStatus) -> String {
+    let label = status.to_string();
+    if status.is_active() {
+        label
+    } else {
+        label.dimmed().to_string()
+    }
+}
+
+fn format_branch_warning(branch: &BranchInfo) -> String {
+    if branch.is_current {
+        return String::new();
+    }
+
+    let status = &branch.merge_status;
+    if status.is_uncertain() {
+        format!("   {}", "may be squash-merged".yellow())
+    } else if status.requires_caution() {
+        format!("   {}", "unmerged".yellow())
+    } else {
+        String::new()
+    }
+}
+
+fn build_branch_list_header(widths: &BranchListWidths) -> String {
+    let header_line = format!(
+        "  {:<name_width$}  {:<status_width$}  {}",
+        "BRANCH",
+        "STATUS",
+        "REMOTE",
+        name_width = widths.name,
+        status_width = widths.status,
+    );
+
+    let separator = "─".repeat(widths.total_width());
+
+    format!("{}\n  {}", header_line.white().bold(), separator.dimmed())
+}
+
+fn build_deletion_result_line(result: &DeletionResult) -> String {
+    match &result.outcome {
+        DeletionOutcome::Deleted => {
+            format!("  {} {}", "✓".green(), result.branch)
+        }
+        DeletionOutcome::ForceDeleted => {
+            format!("  {} {} {}", "✓".green(), result.branch, "(force)".dimmed())
+        }
+        DeletionOutcome::Skipped { reason } => {
+            format!("  {} {}: {}", "○".dimmed(), result.branch, reason.dimmed())
+        }
+        DeletionOutcome::Failed { error } => {
+            format!("  {} {}: {}", "✗".red(), result.branch, error.red())
+        }
+    }
+}
+
+fn print_quiet_cleanup_summary(result: &CleanupResult) {
+    // Single pass: count deletions and collect failed errors
+    let mut deleted_count = 0;
+    let mut failed_errors: Vec<(&str, &str)> = Vec::new();
+
+    for d in &result.deletions {
+        match &d.outcome {
+            DeletionOutcome::Deleted | DeletionOutcome::ForceDeleted => {
+                deleted_count += 1;
+            }
+            DeletionOutcome::Failed { error } => {
+                failed_errors.push((&d.branch, error));
+            }
+            DeletionOutcome::Skipped { .. } => {}
+        }
+    }
+
+    println!(
+        "{}/{} branches deleted",
+        deleted_count,
+        result.deletions.len()
+    );
+
+    for (branch, error) in &failed_errors {
+        eprintln!("error: {}: {}", branch, error);
+    }
+
+    if !failed_errors.is_empty() {
+        eprintln!("{} failed", failed_errors.len());
+    }
+}
+
+fn print_normal_cleanup_summary(result: &CleanupResult, remaining: &[BranchInfo]) {
+    let output = build_cleanup_summary(result, remaining);
+    eprint!("{}", output);
+}
+
+fn build_cleanup_summary(result: &CleanupResult, remaining: &[BranchInfo]) -> String {
+    let mut output = String::new();
+
+    // Header - center plain text first, then apply color to avoid ANSI code width issues
+    let line = "═".repeat(SUMMARY_BOX_WIDTH);
+    let centered_title = format!("{:^width$}", "Cleanup Complete", width = SUMMARY_BOX_WIDTH);
+    output.push_str(&format!("\n{}\n", line.cyan()));
+    output.push_str(&format!("{}\n", centered_title.cyan().bold()));
+    output.push_str(&format!("{}\n\n", line.cyan()));
+
+    // Partition results
+    let (deleted, rest): (Vec<_>, Vec<_>) = result.deletions.iter().partition(|d| {
+        matches!(
+            d.outcome,
+            DeletionOutcome::Deleted | DeletionOutcome::ForceDeleted
+        )
+    });
+    let (skipped, failed): (Vec<_>, Vec<_>) = rest
+        .into_iter()
+        .partition(|d| matches!(d.outcome, DeletionOutcome::Skipped { .. }));
+
+    // Deleted section
+    if !deleted.is_empty() {
+        output.push_str(&format!(
+            "{}\n",
+            format!("Deleted ({}):", deleted.len()).green().bold()
+        ));
+        for d in &deleted {
+            let suffix = if matches!(d.outcome, DeletionOutcome::ForceDeleted) {
+                " (force)"
+            } else {
+                ""
+            };
+            output.push_str(&format!(
+                "  {} {}{}\n",
+                "✓".green(),
+                d.branch,
+                suffix.dimmed()
+            ));
+        }
+        output.push('\n');
+    }
+
+    // Skipped section
+    if !skipped.is_empty() {
+        output.push_str(&format!(
+            "{}\n",
+            format!("Skipped ({}):", skipped.len()).yellow().bold()
+        ));
+        for d in &skipped {
+            if let DeletionOutcome::Skipped { reason } = &d.outcome {
+                output.push_str(&format!(
+                    "  {} {}: {}\n",
+                    "○".dimmed(),
+                    d.branch,
+                    reason.dimmed()
+                ));
+            }
+        }
+        output.push('\n');
+    }
+
+    // Failed section
+    if !failed.is_empty() {
+        output.push_str(&format!(
+            "{}\n",
+            format!("Failed ({}):", failed.len()).red().bold()
+        ));
+        for d in &failed {
+            if let DeletionOutcome::Failed { error } = &d.outcome {
+                output.push_str(&format!("  {} {}\n", "✗".red(), d.branch));
+                output.push_str(&format!("    {}: {}\n", "Error".red(), error));
+                output.push_str(&format!(
+                    "    {}: Use 'git branch -D {}' to force delete\n",
+                    "Hint".dimmed(),
+                    d.branch
+                ));
+            }
+        }
+        output.push('\n');
+    }
+
+    // Remaining branches
+    if !remaining.is_empty() {
+        output.push_str(&format!(
+            "{}: {}\n",
+            "Remaining branches".white().bold(),
+            remaining.len()
+        ));
+        for branch in remaining {
+            let suffix = if branch.is_current {
+                " (current)".cyan().to_string()
+            } else {
+                String::new()
+            };
+            output.push_str(&format!("  - {}{}\n", branch.name, suffix));
+        }
+    }
+
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -964,5 +1341,613 @@ mod tests {
         quiet_progress.update(&UpdateStep::Fetching);
         quiet_progress.finish_success("repo-b");
         quiet_progress.finish_failed("repo-b", "error");
+    }
+
+    use crate::cleanup::{
+        BranchInfo, CleanupResult, DeletionOutcome, DeletionResult, MergeStatus, TrackingStatus,
+    };
+
+    fn make_branch(
+        name: &str,
+        is_current: bool,
+        merge: MergeStatus,
+        tracking: TrackingStatus,
+    ) -> BranchInfo {
+        BranchInfo {
+            name: name.to_string(),
+            is_current,
+            merge_status: merge,
+            tracking_status: tracking,
+        }
+    }
+
+    #[test]
+    fn test_column_widths_from_branches() {
+        let branches = vec![
+            make_branch(
+                "short",
+                false,
+                MergeStatus::Merged,
+                TrackingStatus::RemoteGone,
+            ),
+            make_branch(
+                "much-longer-branch-name",
+                false,
+                MergeStatus::Unmerged,
+                TrackingStatus::NoUpstream,
+            ),
+        ];
+
+        let widths = BranchListWidths::from_branches(&branches);
+        assert_eq!(widths.name, 23); // "much-longer-branch-name"
+        assert_eq!(widths.status, 16); // "(current branch)" constant
+        assert_eq!(widths.remote, 7); // "unknown" constant
+    }
+
+    #[test]
+    fn test_column_widths_minimum_enforced() {
+        let branches = vec![make_branch(
+            "a",
+            false,
+            MergeStatus::Merged,
+            TrackingStatus::RemoteGone,
+        )];
+
+        let widths = BranchListWidths::from_branches(&branches);
+        assert!(widths.name >= 6); // MIN_NAME_WIDTH
+    }
+
+    #[test]
+    fn test_column_widths_maximum_enforced() {
+        // 70-character branch name exceeds MAX_NAME_WIDTH of 60
+        let long_name = "a".repeat(70);
+        let branches = vec![make_branch(
+            &long_name,
+            false,
+            MergeStatus::Merged,
+            TrackingStatus::RemoteGone,
+        )];
+
+        let widths = BranchListWidths::from_branches(&branches);
+        assert_eq!(widths.name, 60); // MAX_NAME_WIDTH
+    }
+
+    #[test]
+    fn test_column_widths_empty_branches() {
+        let widths = BranchListWidths::from_branches(&[]);
+        assert!(widths.name >= 6);
+    }
+
+    #[test]
+    fn test_format_branch_line_merged_gone() {
+        colored::control::set_override(false);
+        let branch = make_branch(
+            "feature/auth",
+            false,
+            MergeStatus::Merged,
+            TrackingStatus::RemoteGone,
+        );
+        let widths = BranchListWidths::from_branches(&[branch.clone()]);
+
+        let line = format_branch_line(&branch, &widths);
+        assert!(line.contains("feature/auth"));
+        assert!(line.contains("merged"));
+        assert!(line.contains("gone"));
+        assert!(line.starts_with(" ")); // not current
+    }
+
+    #[test]
+    fn test_format_branch_line_current_branch() {
+        colored::control::set_override(false);
+        let branch = make_branch(
+            "feature/current",
+            true,
+            MergeStatus::Unmerged,
+            TrackingStatus::RemoteExists("origin/feature/current".to_string()),
+        );
+        let widths = BranchListWidths::from_branches(&[branch.clone()]);
+
+        let line = format_branch_line(&branch, &widths);
+        assert!(line.starts_with("*")); // current branch marker
+        assert!(line.contains("(current branch)"));
+        assert!(line.contains("exists"));
+    }
+
+    #[test]
+    fn test_format_branch_line_unmerged_shows_warning() {
+        colored::control::set_override(false);
+        let branch = make_branch(
+            "experiment",
+            false,
+            MergeStatus::Unmerged,
+            TrackingStatus::RemoteGone,
+        );
+        let widths = BranchListWidths::from_branches(&[branch.clone()]);
+
+        let line = format_branch_line(&branch, &widths);
+        assert!(line.contains("unmerged"));
+    }
+
+    #[test]
+    fn test_format_branch_line_unclear_shows_squash_hint() {
+        colored::control::set_override(false);
+        let branch = make_branch(
+            "old-feature",
+            false,
+            MergeStatus::Unclear,
+            TrackingStatus::NoUpstream,
+        );
+        let widths = BranchListWidths::from_branches(&[branch.clone()]);
+
+        let line = format_branch_line(&branch, &widths);
+        assert!(line.contains("unclear"));
+        assert!(line.contains("may be squash-merged"));
+    }
+
+    #[test]
+    fn test_build_branch_list_header() {
+        colored::control::set_override(false);
+        let branches = vec![make_branch(
+            "feature/test",
+            false,
+            MergeStatus::Merged,
+            TrackingStatus::RemoteGone,
+        )];
+        let widths = BranchListWidths::from_branches(&branches);
+
+        let header = build_branch_list_header(&widths);
+        assert!(header.contains("BRANCH"));
+        assert!(header.contains("STATUS"));
+        assert!(header.contains("REMOTE"));
+        assert!(header.contains("─")); // separator line
+    }
+
+    #[test]
+    fn test_build_deletion_result_line_deleted() {
+        colored::control::set_override(false);
+        let result = DeletionResult {
+            branch: "feature/done".to_string(),
+            outcome: DeletionOutcome::Deleted,
+        };
+
+        let line = build_deletion_result_line(&result);
+        assert!(line.contains("✓"));
+        assert!(line.contains("feature/done"));
+    }
+
+    #[test]
+    fn test_build_deletion_result_line_force_deleted() {
+        colored::control::set_override(false);
+        let result = DeletionResult {
+            branch: "experiment".to_string(),
+            outcome: DeletionOutcome::ForceDeleted,
+        };
+
+        let line = build_deletion_result_line(&result);
+        assert!(line.contains("✓"));
+        assert!(line.contains("experiment"));
+        assert!(line.contains("(force)"));
+    }
+
+    #[test]
+    fn test_build_deletion_result_line_skipped() {
+        colored::control::set_override(false);
+        let result = DeletionResult {
+            branch: "feature/current".to_string(),
+            outcome: DeletionOutcome::Skipped {
+                reason: "current branch".to_string(),
+            },
+        };
+
+        let line = build_deletion_result_line(&result);
+        assert!(line.contains("○"));
+        assert!(line.contains("feature/current"));
+        assert!(line.contains("current branch"));
+    }
+
+    #[test]
+    fn test_build_deletion_result_line_failed() {
+        colored::control::set_override(false);
+        let result = DeletionResult {
+            branch: "broken".to_string(),
+            outcome: DeletionOutcome::Failed {
+                error: "branch not fully merged".to_string(),
+            },
+        };
+
+        let line = build_deletion_result_line(&result);
+        assert!(line.contains("✗"));
+        assert!(line.contains("broken"));
+        assert!(line.contains("branch not fully merged"));
+    }
+
+    #[test]
+    fn test_build_cleanup_summary_all_deleted() {
+        colored::control::set_override(false);
+        let result = CleanupResult {
+            main_branch: "master".to_string(),
+            deletions: vec![
+                DeletionResult {
+                    branch: "feature/a".to_string(),
+                    outcome: DeletionOutcome::Deleted,
+                },
+                DeletionResult {
+                    branch: "feature/b".to_string(),
+                    outcome: DeletionOutcome::ForceDeleted,
+                },
+            ],
+            switched_from: None,
+        };
+        let remaining = vec![make_branch(
+            "master",
+            false,
+            MergeStatus::Merged,
+            TrackingStatus::RemoteExists("origin/master".to_string()),
+        )];
+
+        let output = build_cleanup_summary(&result, &remaining);
+        assert!(output.contains("Cleanup Complete"));
+        assert!(output.contains("Deleted (2):"));
+        assert!(output.contains("feature/a"));
+        assert!(output.contains("feature/b"));
+        assert!(output.contains("(force)"));
+        assert!(output.contains("Remaining branches"));
+        assert!(output.contains("master"));
+    }
+
+    #[test]
+    fn test_build_cleanup_summary_with_failures() {
+        colored::control::set_override(false);
+        let result = CleanupResult {
+            main_branch: "main".to_string(),
+            deletions: vec![
+                DeletionResult {
+                    branch: "good".to_string(),
+                    outcome: DeletionOutcome::Deleted,
+                },
+                DeletionResult {
+                    branch: "bad".to_string(),
+                    outcome: DeletionOutcome::Failed {
+                        error: "not fully merged".to_string(),
+                    },
+                },
+            ],
+            switched_from: None,
+        };
+
+        let output = build_cleanup_summary(&result, &[]);
+        assert!(output.contains("Deleted (1):"));
+        assert!(output.contains("Failed (1):"));
+        assert!(output.contains("bad"));
+        assert!(output.contains("not fully merged"));
+        assert!(output.contains("Hint"));
+        assert!(output.contains("git branch -D bad"));
+    }
+
+    #[test]
+    fn test_build_cleanup_summary_with_skipped() {
+        colored::control::set_override(false);
+        let result = CleanupResult {
+            main_branch: "master".to_string(),
+            deletions: vec![DeletionResult {
+                branch: "current-feature".to_string(),
+                outcome: DeletionOutcome::Skipped {
+                    reason: "current branch".to_string(),
+                },
+            }],
+            switched_from: None,
+        };
+
+        let output = build_cleanup_summary(&result, &[]);
+        assert!(output.contains("Skipped (1):"));
+        assert!(output.contains("current-feature"));
+        assert!(output.contains("current branch"));
+    }
+
+    #[test]
+    fn test_build_cleanup_summary_remaining_with_current() {
+        colored::control::set_override(false);
+        let result = CleanupResult {
+            main_branch: "master".to_string(),
+            deletions: vec![],
+            switched_from: None,
+        };
+        let remaining = vec![
+            make_branch(
+                "master",
+                false,
+                MergeStatus::Merged,
+                TrackingStatus::RemoteExists("origin/master".to_string()),
+            ),
+            make_branch(
+                "feature/wip",
+                true,
+                MergeStatus::Unmerged,
+                TrackingStatus::NoUpstream,
+            ),
+        ];
+
+        let output = build_cleanup_summary(&result, &remaining);
+        assert!(output.contains("Remaining branches: 2"));
+        assert!(output.contains("master"));
+        assert!(output.contains("feature/wip"));
+        assert!(output.contains("(current)"));
+    }
+
+    #[test]
+    fn test_format_merge_status_colors() {
+        colored::control::set_override(false);
+        assert_eq!(format_merge_status(&MergeStatus::Merged), "merged");
+        assert_eq!(format_merge_status(&MergeStatus::SquashMerged), "merged");
+        assert_eq!(format_merge_status(&MergeStatus::Unmerged), "unmerged");
+        assert_eq!(format_merge_status(&MergeStatus::Unclear), "unclear");
+    }
+
+    #[test]
+    fn test_format_tracking_status() {
+        colored::control::set_override(false);
+        assert_eq!(format_tracking_status(&TrackingStatus::RemoteGone), "gone");
+        assert_eq!(
+            format_tracking_status(&TrackingStatus::RemoteExists("origin/foo".to_string())),
+            "exists"
+        );
+        assert_eq!(format_tracking_status(&TrackingStatus::NoUpstream), "local");
+        assert_eq!(format_tracking_status(&TrackingStatus::Unknown), "unknown");
+    }
+
+    #[test]
+    fn test_format_branch_warning() {
+        let unclear = make_branch(
+            "unclear-branch",
+            false,
+            MergeStatus::Unclear,
+            TrackingStatus::NoUpstream,
+        );
+        let warning = format_branch_warning(&unclear);
+        assert!(warning.contains("may be squash-merged"));
+
+        let unmerged = make_branch(
+            "unmerged-branch",
+            false,
+            MergeStatus::Unmerged,
+            TrackingStatus::NoUpstream,
+        );
+        let warning = format_branch_warning(&unmerged);
+        assert!(warning.contains("unmerged"));
+
+        let merged = make_branch(
+            "merged-branch",
+            false,
+            MergeStatus::Merged,
+            TrackingStatus::NoUpstream,
+        );
+        let warning = format_branch_warning(&merged);
+        assert!(warning.is_empty());
+
+        let current = make_branch(
+            "current",
+            true,
+            MergeStatus::Unmerged,
+            TrackingStatus::NoUpstream,
+        );
+        let warning = format_branch_warning(&current);
+        assert!(warning.is_empty()); // current branches don't get warnings
+    }
+
+    #[test]
+    fn test_print_functions_respect_quiet_mode() {
+        let quiet = Config {
+            verbosity: crate::config::Verbosity::Quiet,
+        };
+        let branches = vec![make_branch(
+            "test",
+            false,
+            MergeStatus::Merged,
+            TrackingStatus::RemoteGone,
+        )];
+        let widths = BranchListWidths::from_branches(&branches);
+
+        // These should not panic and should produce no output in quiet mode
+        print_branch_list_header(&widths, &quiet);
+        print_branch_list(&branches, &quiet);
+        print_analyzing_branches(&quiet);
+        print_no_branches_to_clean(&quiet);
+        print_deleting_header(&quiet);
+    }
+
+    #[test]
+    fn test_print_functions_normal_mode_smoke() {
+        let normal = Config {
+            verbosity: crate::config::Verbosity::Normal,
+        };
+        let branches = vec![make_branch(
+            "feature",
+            false,
+            MergeStatus::Merged,
+            TrackingStatus::RemoteGone,
+        )];
+        let widths = BranchListWidths::from_branches(&branches);
+        let result = DeletionResult {
+            branch: "feature".to_string(),
+            outcome: DeletionOutcome::Deleted,
+        };
+        let cleanup_result = CleanupResult {
+            main_branch: "master".to_string(),
+            deletions: vec![result.clone()],
+            switched_from: None,
+        };
+
+        // Smoke tests - should not panic
+        print_branch_list_header(&widths, &normal);
+        print_branch_list(&branches, &normal);
+        print_deletion_result(&result, &normal);
+        print_cleanup_summary(&cleanup_result, &[], &normal);
+        print_analyzing_branches(&normal);
+        print_no_branches_to_clean(&normal);
+        print_deleting_header(&normal);
+    }
+
+    #[test]
+    fn test_format_branch_line_public_api() {
+        colored::control::set_override(false);
+        let branch = make_branch(
+            "api-test",
+            false,
+            MergeStatus::Merged,
+            TrackingStatus::RemoteGone,
+        );
+        let widths = BranchListWidths::from_branches(&[branch.clone()]);
+
+        let line = format_branch_line(&branch, &widths);
+        assert!(line.contains("api-test"));
+    }
+
+    // Color-enabled tests to verify ANSI codes are emitted
+    #[test]
+    fn test_format_merge_status_emits_green_for_safe() {
+        colored::control::set_override(true);
+        let result = format_merge_status(&MergeStatus::Merged);
+        assert!(result.contains("\x1b[32m"), "Expected green ANSI code");
+
+        let result = format_merge_status(&MergeStatus::SquashMerged);
+        assert!(result.contains("\x1b[32m"), "Expected green ANSI code");
+    }
+
+    #[test]
+    fn test_format_merge_status_emits_yellow_for_caution() {
+        colored::control::set_override(true);
+        let result = format_merge_status(&MergeStatus::Unmerged);
+        assert!(result.contains("\x1b[33m"), "Expected yellow ANSI code");
+    }
+
+    #[test]
+    fn test_format_merge_status_emits_magenta_for_uncertain() {
+        colored::control::set_override(true);
+        let result = format_merge_status(&MergeStatus::Unclear);
+        assert!(result.contains("\x1b[35m"), "Expected magenta ANSI code");
+    }
+
+    #[test]
+    fn test_format_tracking_status_emits_dim_for_inactive() {
+        colored::control::set_override(true);
+        let result = format_tracking_status(&TrackingStatus::RemoteGone);
+        assert!(result.contains("\x1b[2m"), "Expected dim ANSI code");
+
+        let result = format_tracking_status(&TrackingStatus::NoUpstream);
+        assert!(result.contains("\x1b[2m"), "Expected dim ANSI code");
+    }
+
+    #[test]
+    fn test_format_tracking_status_no_style_for_active() {
+        colored::control::set_override(true);
+        let result = format_tracking_status(&TrackingStatus::RemoteExists("origin/foo".into()));
+        // Active status should not have ANSI codes
+        assert!(
+            !result.contains("\x1b["),
+            "Expected no ANSI codes for active remote"
+        );
+    }
+
+    // Invariant tests for BranchListWidths
+    #[test]
+    fn test_branch_list_widths_invariant_min_bound() {
+        // Test with various branch name lengths
+        for len in 0..=10 {
+            let name = "x".repeat(len);
+            let branches = vec![make_branch(
+                &name,
+                false,
+                MergeStatus::Merged,
+                TrackingStatus::RemoteGone,
+            )];
+            let widths = BranchListWidths::from_branches(&branches);
+            assert!(
+                widths.name >= BranchListWidths::MIN_NAME_WIDTH,
+                "Width {} should be >= MIN {}",
+                widths.name,
+                BranchListWidths::MIN_NAME_WIDTH
+            );
+        }
+    }
+
+    #[test]
+    fn test_branch_list_widths_invariant_max_bound() {
+        // Test with very long branch names
+        for len in [50, 60, 70, 100, 200] {
+            let name = "x".repeat(len);
+            let branches = vec![make_branch(
+                &name,
+                false,
+                MergeStatus::Merged,
+                TrackingStatus::RemoteGone,
+            )];
+            let widths = BranchListWidths::from_branches(&branches);
+            assert!(
+                widths.name <= BranchListWidths::MAX_NAME_WIDTH,
+                "Width {} should be <= MAX {}",
+                widths.name,
+                BranchListWidths::MAX_NAME_WIDTH
+            );
+        }
+    }
+
+    #[test]
+    fn test_branch_list_widths_tracks_longest_branch() {
+        let branches = vec![
+            make_branch(
+                "short",
+                false,
+                MergeStatus::Merged,
+                TrackingStatus::RemoteGone,
+            ),
+            make_branch(
+                "medium-name",
+                false,
+                MergeStatus::Merged,
+                TrackingStatus::RemoteGone,
+            ),
+            make_branch(
+                "this-is-a-longer-name",
+                false,
+                MergeStatus::Merged,
+                TrackingStatus::RemoteGone,
+            ),
+        ];
+        let widths = BranchListWidths::from_branches(&branches);
+        assert_eq!(widths.name, "this-is-a-longer-name".len());
+    }
+
+    // Semantic color mapping consistency tests
+    #[test]
+    fn test_color_mapping_matches_semantic_methods() {
+        colored::control::set_override(true);
+
+        // Safe statuses should be green
+        for status in [MergeStatus::Merged, MergeStatus::SquashMerged] {
+            assert!(status.is_safely_deletable());
+            let formatted = format_merge_status(&status);
+            assert!(
+                formatted.contains("\x1b[32m"),
+                "Safe status should be green"
+            );
+        }
+
+        // Caution status should be yellow
+        let status = MergeStatus::Unmerged;
+        assert!(status.requires_caution());
+        let formatted = format_merge_status(&status);
+        assert!(
+            formatted.contains("\x1b[33m"),
+            "Caution status should be yellow"
+        );
+
+        // Uncertain status should be magenta
+        let status = MergeStatus::Unclear;
+        assert!(status.is_uncertain());
+        let formatted = format_merge_status(&status);
+        assert!(
+            formatted.contains("\x1b[35m"),
+            "Uncertain status should be magenta"
+        );
     }
 }

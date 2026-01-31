@@ -46,23 +46,35 @@ pub enum MergeStatus {
 }
 
 impl MergeStatus {
-    /// Returns a human-readable label for displaying in the UI.
-    ///
-    /// Both `Merged` and `SquashMerged` return "merged" since the distinction
-    /// is typically not relevant to end users.
-    #[must_use]
-    pub fn display(&self) -> &'static str {
-        match self {
-            MergeStatus::Merged | MergeStatus::SquashMerged => "merged",
-            MergeStatus::Unmerged => "unmerged",
-            MergeStatus::Unclear => "unclear",
-        }
-    }
-
     /// Returns true if the branch is safe to delete without force.
     #[must_use]
     pub fn is_safely_deletable(&self) -> bool {
-        matches!(self, MergeStatus::Merged | MergeStatus::SquashMerged)
+        matches!(self, Self::Merged | Self::SquashMerged)
+    }
+
+    /// Returns true if this status requires user caution (potential data loss).
+    #[must_use]
+    pub fn requires_caution(&self) -> bool {
+        matches!(self, Self::Unmerged)
+    }
+
+    /// Returns true if the merge status is uncertain and needs verification.
+    #[must_use]
+    pub fn is_uncertain(&self) -> bool {
+        matches!(self, Self::Unclear)
+    }
+}
+
+impl std::fmt::Display for MergeStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Both Merged and SquashMerged display as "merged" since the
+        // distinction is typically not relevant to end users.
+        let label = match self {
+            Self::Merged | Self::SquashMerged => "merged",
+            Self::Unmerged => "unmerged",
+            Self::Unclear => "unclear",
+        };
+        write!(f, "{}", label)
     }
 }
 
@@ -81,24 +93,31 @@ pub enum TrackingStatus {
 }
 
 impl TrackingStatus {
-    /// Returns a human-readable label for displaying in the UI.
-    #[must_use]
-    pub fn display(&self) -> &'static str {
-        match self {
-            TrackingStatus::RemoteExists(_) => "exists",
-            TrackingStatus::RemoteGone => "gone",
-            TrackingStatus::NoUpstream => "local",
-            TrackingStatus::Unknown => "unknown",
-        }
-    }
-
     /// Returns the full remote tracking branch reference (e.g., "origin/feature-x").
     #[must_use]
     pub fn remote_name(&self) -> Option<&str> {
         match self {
-            TrackingStatus::RemoteExists(name) => Some(name),
+            Self::RemoteExists(name) => Some(name),
             _ => None,
         }
+    }
+
+    /// Returns true if the remote tracking branch is actively maintained.
+    #[must_use]
+    pub fn is_active(&self) -> bool {
+        matches!(self, Self::RemoteExists(_))
+    }
+}
+
+impl std::fmt::Display for TrackingStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let label = match self {
+            Self::RemoteExists(_) => "exists",
+            Self::RemoteGone => "gone",
+            Self::NoUpstream => "local",
+            Self::Unknown => "unknown",
+        };
+        write!(f, "{}", label)
     }
 }
 
@@ -317,8 +336,14 @@ pub fn list_branches(
         }
 
         let is_current = current_branch.as_deref() == Some(name);
-        let merge_status =
-            check_merge_status_with_cache(repo, name, main_branch, &merged_branches, config, logger);
+        let merge_status = check_merge_status_with_cache(
+            repo,
+            name,
+            main_branch,
+            &merged_branches,
+            config,
+            logger,
+        );
         let tracking_status = check_tracking_status(repo, upstream, config, logger);
 
         branches.push(BranchInfo {
@@ -480,11 +505,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_merge_status_display() {
-        assert_eq!(MergeStatus::Merged.display(), "merged");
-        assert_eq!(MergeStatus::SquashMerged.display(), "merged");
-        assert_eq!(MergeStatus::Unmerged.display(), "unmerged");
-        assert_eq!(MergeStatus::Unclear.display(), "unclear");
+    fn test_merge_status_display_trait() {
+        assert_eq!(MergeStatus::Merged.to_string(), "merged");
+        assert_eq!(MergeStatus::SquashMerged.to_string(), "merged");
+        assert_eq!(MergeStatus::Unmerged.to_string(), "unmerged");
+        assert_eq!(MergeStatus::Unclear.to_string(), "unclear");
     }
 
     #[test]
@@ -496,14 +521,38 @@ mod tests {
     }
 
     #[test]
-    fn test_tracking_status_display() {
+    fn test_merge_status_requires_caution() {
+        assert!(!MergeStatus::Merged.requires_caution());
+        assert!(!MergeStatus::SquashMerged.requires_caution());
+        assert!(MergeStatus::Unmerged.requires_caution());
+        assert!(!MergeStatus::Unclear.requires_caution());
+    }
+
+    #[test]
+    fn test_merge_status_is_uncertain() {
+        assert!(!MergeStatus::Merged.is_uncertain());
+        assert!(!MergeStatus::SquashMerged.is_uncertain());
+        assert!(!MergeStatus::Unmerged.is_uncertain());
+        assert!(MergeStatus::Unclear.is_uncertain());
+    }
+
+    #[test]
+    fn test_tracking_status_display_trait() {
         assert_eq!(
-            TrackingStatus::RemoteExists("origin/foo".to_string()).display(),
+            TrackingStatus::RemoteExists("origin/foo".to_string()).to_string(),
             "exists"
         );
-        assert_eq!(TrackingStatus::RemoteGone.display(), "gone");
-        assert_eq!(TrackingStatus::NoUpstream.display(), "local");
-        assert_eq!(TrackingStatus::Unknown.display(), "unknown");
+        assert_eq!(TrackingStatus::RemoteGone.to_string(), "gone");
+        assert_eq!(TrackingStatus::NoUpstream.to_string(), "local");
+        assert_eq!(TrackingStatus::Unknown.to_string(), "unknown");
+    }
+
+    #[test]
+    fn test_tracking_status_is_active() {
+        assert!(TrackingStatus::RemoteExists("origin/foo".to_string()).is_active());
+        assert!(!TrackingStatus::RemoteGone.is_active());
+        assert!(!TrackingStatus::NoUpstream.is_active());
+        assert!(!TrackingStatus::Unknown.is_active());
     }
 
     #[test]
@@ -519,10 +568,18 @@ mod tests {
 
     #[test]
     fn test_contains_conflict_markers_detects_standard_markers() {
-        assert!(contains_conflict_markers(&format!("{} HEAD", CONFLICT_START)));
+        assert!(contains_conflict_markers(&format!(
+            "{} HEAD",
+            CONFLICT_START
+        )));
         assert!(contains_conflict_markers(CONFLICT_MIDDLE));
-        assert!(contains_conflict_markers(&format!("{} branch", CONFLICT_END)));
-        assert!(contains_conflict_markers("CONFLICT (content): Merge conflict in file.txt"));
+        assert!(contains_conflict_markers(&format!(
+            "{} branch",
+            CONFLICT_END
+        )));
+        assert!(contains_conflict_markers(
+            "CONFLICT (content): Merge conflict in file.txt"
+        ));
     }
 
     #[test]
