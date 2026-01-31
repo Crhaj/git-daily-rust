@@ -177,6 +177,7 @@ pub fn detect_main_branch(
 /// Note: This function calls git for each invocation. For checking multiple
 /// branches, use [`list_branches`] which pre-computes the merged set for O(1)
 /// lookups instead of O(N) git calls.
+#[allow(dead_code)] // Used by CLI in Phase 6
 pub(crate) fn check_merge_status(
     repo: &Path,
     branch: &str,
@@ -218,6 +219,7 @@ fn get_merged_branches(
 ///
 /// Note: For batch operations, prefer using `get_merged_branches` once and
 /// checking membership to avoid repeated git calls.
+#[allow(dead_code)] // Called by check_merge_status
 fn is_traditionally_merged(
     repo: &Path,
     branch: &str,
