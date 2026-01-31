@@ -224,8 +224,8 @@ mod mock {
                 .len();
 
             let total = multi + select + confirm + type_confirm;
-            assert!(
-                total == 0,
+            assert_eq!(
+                total, 0,
                 "MockPrompter has {} unconsumed responses (multi_select: {}, select: {}, confirm: {}, type_confirm: {})",
                 total, multi, select, confirm, type_confirm
             );
@@ -281,7 +281,10 @@ mod tests {
     fn test_mock_multi_select_returns_configured_indices() {
         let mock = MockPrompter::new().with_multi_select(vec![0, 2]);
 
-        assert_eq!(mock.multi_select("Select", &["a", "b", "c"]).unwrap(), vec![0, 2]);
+        assert_eq!(
+            mock.multi_select("Select", &["a", "b", "c"]).unwrap(),
+            vec![0, 2]
+        );
         mock.assert_all_consumed();
     }
 
@@ -318,9 +321,7 @@ mod tests {
 
     #[test]
     fn test_mock_confirm_returns_configured_values() {
-        let mock = MockPrompter::new()
-            .with_confirm(true)
-            .with_confirm(false);
+        let mock = MockPrompter::new().with_confirm(true).with_confirm(false);
 
         assert!(mock.confirm("First?", false).unwrap());
         assert!(!mock.confirm("Second?", true).unwrap());
@@ -359,9 +360,7 @@ mod tests {
 
     #[test]
     fn test_mock_assert_all_consumed_passes_when_empty() {
-        let mock = MockPrompter::new()
-            .with_confirm(true)
-            .with_select(0);
+        let mock = MockPrompter::new().with_confirm(true).with_select(0);
 
         let _ = mock.confirm("?", false);
         let _ = mock.select("?", &["a"]);
@@ -372,12 +371,10 @@ mod tests {
     #[test]
     #[should_panic(expected = "unconsumed responses")]
     fn test_mock_assert_all_consumed_panics_with_remaining() {
-        let mock = MockPrompter::new()
-            .with_confirm(true)
-            .with_confirm(false);
+        let mock = MockPrompter::new().with_confirm(true).with_confirm(false);
 
         let _ = mock.confirm("?", false);
-        // Second confirm not consumed
+        // Second, confirm not consumed
 
         mock.assert_all_consumed();
     }
