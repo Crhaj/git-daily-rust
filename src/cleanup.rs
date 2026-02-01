@@ -164,7 +164,13 @@ pub struct CleanupResult {
     pub main_branch: String,
     /// Results for each branch deletion attempt.
     pub deletions: Vec<DeletionResult>,
-    /// If we had to switch away from a branch to delete it, the original branch name.
+    /// The branch we switched away from to delete it, if any.
+    ///
+    /// When the user selects their current branch for deletion, we must first
+    /// switch to main before deleting. This field records the original branch
+    /// so we can inform the user about the switch.
+    ///
+    /// `None` when no switch was needed (current branch wasn't selected).
     pub switched_from: Option<String>,
 }
 
@@ -340,10 +346,13 @@ pub fn list_branches(
             repo,
             name,
             main_branch,
-            &merged_branches,
             config,
+            &merged_branches,
             logger,
         );
+        // Note: This performs one git command per branch to check remote status.
+        // For repos with many branches, we could batch-fetch all remote refs upfront.
+        // Current implementation prioritizes simplicity and correctness.
         let tracking_status = check_tracking_status(repo, upstream, config, logger);
 
         branches.push(BranchInfo {
@@ -364,8 +373,8 @@ fn check_merge_status_with_cache(
     repo: &Path,
     branch: &str,
     main_branch: &str,
-    merged_branches: &HashSet<String>,
     config: &Config,
+    merged_branches: &HashSet<String>,
     logger: GitLogger,
 ) -> MergeStatus {
     // Phase 1: Check pre-computed merged set (O(1) lookup)
@@ -608,6 +617,15 @@ mod tests {
         let (name, upstream) = parse_branch_line("just-a-name");
         assert_eq!(name, "just-a-name");
         assert_eq!(upstream, "");
+    }
+
+    #[test]
+    fn test_parse_branch_line_ignores_extra_fields() {
+        // If git output ever includes additional pipe-delimited fields, we should
+        // gracefully ignore them rather than failing
+        let (name, upstream) = parse_branch_line("feature|origin/feature|extra|fields");
+        assert_eq!(name, "feature");
+        assert_eq!(upstream, "origin/feature");
     }
 
     #[test]

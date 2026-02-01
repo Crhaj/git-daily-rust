@@ -1,29 +1,49 @@
 //! CLI entry point for git-daily-v2.
 
-use clap::Parser;
+use anyhow::Context;
+use clap::{Parser, Subcommand};
+use colored::Colorize;
+use git_daily_rust::cleanup::{
+    self, BranchInfo, CleanupResult, DeletionMode, DeletionOutcome,
+};
 use git_daily_rust::config::{Config, Verbosity};
 use git_daily_rust::constants::{DEFAULT_REPO_NAME, RAYON_THREAD_COUNT};
+use git_daily_rust::prompt::{Prompter, TerminalPrompter};
 use git_daily_rust::repo::UpdateOutcome;
 use git_daily_rust::{output, repo};
 use std::path::Path;
 
 #[derive(Parser)]
 #[command(name = "git-daily-v2")]
-#[command(
-    about = "Update master/main branches in git repositories. Useful to update everything in your workspace at once."
-)]
+#[command(about = "Keep git repositories up to date and clean up stale branches.")]
 #[command(version)]
 #[command(
-    after_help = "EXIT CODES:\n  0  All repositories updated successfully\n  1  Some repositories failed\n  2  All repositories failed"
+    after_help = "EXIT CODES:\n  0  Success\n  1  Partial failure\n  2  Complete failure"
 )]
 struct Args {
-    /// Show git commands being executed (runs sequentially in workspace mode)
-    #[arg(short, long)]
+    /// Show git commands being executed
+    #[arg(short, long, global = true)]
     verbose: bool,
 
-    /// Minimal output (errors only). Ideal for CI/scripts
-    #[arg(short, long, conflicts_with = "verbose")]
+    /// Minimal output (errors only)
+    #[arg(short, long, global = true, conflicts_with = "verbose")]
     quiet: bool,
+
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Update master/main branches (default when no subcommand given)
+    Update,
+
+    /// Interactively clean up stale local branches
+    Cleanup {
+        /// Show what would be deleted without making changes
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 impl Args {
@@ -48,20 +68,147 @@ fn main() -> anyhow::Result<()> {
         .num_threads(RAYON_THREAD_COUNT)
         .build_global();
 
-    let start = std::time::Instant::now();
     let cwd = std::env::current_dir()?;
 
-    output::print_working_dir(&cwd, &config);
+    match args.command {
+        None | Some(Command::Update) => run_update(&cwd, &config),
+        Some(Command::Cleanup { dry_run }) => run_cleanup(&cwd, dry_run, &config),
+    }
+}
 
-    let results: Vec<_> = if repo::is_git_repo(&cwd) {
-        run_single_repo(&cwd, &config)
+fn run_update(cwd: &Path, config: &Config) -> anyhow::Result<()> {
+    let start = std::time::Instant::now();
+
+    output::print_working_dir(cwd, config);
+
+    let results: Vec<_> = if repo::is_git_repo(cwd) {
+        run_single_repo(cwd, config)
     } else {
-        run_workspace(&cwd, &config)
+        run_workspace(cwd, config)
     };
 
-    output::print_summary(&results, start.elapsed(), &config);
+    output::print_summary(&results, start.elapsed(), config);
 
     std::process::exit(compute_exit_code(&results));
+}
+
+fn run_cleanup(cwd: &Path, dry_run: bool, config: &Config) -> anyhow::Result<()> {
+    if !repo::is_git_repo(cwd) {
+        anyhow::bail!("Not a git repository. Cleanup only works inside a git repo.");
+    }
+
+    let logger = config.git_logger();
+    let prompter = TerminalPrompter;
+
+    output::print_analyzing_branches(config);
+
+    // List all branches with their status
+    let branches = cleanup::list_branches(cwd, config, logger)
+        .context("Failed to analyze branches for cleanup")?;
+
+    if branches.is_empty() {
+        output::print_no_branches_to_clean(config);
+        return Ok(());
+    }
+
+    // Display branch list
+    output::print_branch_list(&branches, config);
+
+    // Build selection items for prompt
+    let items: Vec<&str> = branches.iter().map(|b| b.name.as_str()).collect();
+
+    // Get user selection
+    let selected_indices = prompter.multi_select("\nSelect branches to delete", &items)?;
+
+    if selected_indices.is_empty() {
+        if !config.is_quiet() {
+            eprintln!("No branches selected.");
+        }
+        return Ok(());
+    }
+
+    let selected_branches: Vec<&BranchInfo> =
+        selected_indices.iter().map(|&i| &branches[i]).collect();
+
+    // Check for unmerged branches
+    let has_unmerged = selected_branches
+        .iter()
+        .any(|b| b.merge_status.requires_caution() || b.merge_status.is_uncertain());
+
+    // Confirm deletion
+    let confirmed = if has_unmerged {
+        prompter.type_to_confirm(
+            "You selected unmerged branches. Type 'delete' to confirm",
+            "delete",
+        )?
+    } else {
+        prompter.confirm(
+            &format!("Delete {} branch(es)?", selected_branches.len()),
+            false,
+        )?
+    };
+
+    if !confirmed {
+        if !config.is_quiet() {
+            eprintln!("Cancelled.");
+        }
+        return Ok(());
+    }
+
+    if dry_run {
+        if !config.is_quiet() {
+            eprintln!("\n{}", "Dry run - no branches deleted.".yellow());
+            for branch in &selected_branches {
+                eprintln!("  Would delete: {}", branch.name);
+            }
+        }
+        return Ok(());
+    }
+
+    // Perform deletions
+    output::print_deleting_header(config);
+
+    let deletion_mode = if has_unmerged {
+        DeletionMode::Force
+    } else {
+        DeletionMode::Safe
+    };
+
+    let mut deletions = Vec::with_capacity(selected_branches.len());
+    for branch in &selected_branches {
+        let result = cleanup::delete_single_branch(cwd, branch, deletion_mode, config, logger);
+        output::print_deletion_result(&result, config);
+        deletions.push(result);
+    }
+
+    // Calculate remaining branches
+    let deleted_names: std::collections::HashSet<_> = deletions
+        .iter()
+        .filter(|d| {
+            matches!(
+                d.outcome,
+                DeletionOutcome::Deleted | DeletionOutcome::ForceDeleted
+            )
+        })
+        .map(|d| d.branch.as_str())
+        .collect();
+
+    let remaining: Vec<BranchInfo> = branches
+        .into_iter()
+        .filter(|b| !deleted_names.contains(b.name.as_str()))
+        .collect();
+
+    let result = CleanupResult {
+        main_branch: cleanup::detect_main_branch(cwd, config, logger)
+            .context("Failed to detect main branch")?
+            .to_string(),
+        deletions,
+        switched_from: None,
+    };
+
+    output::print_cleanup_summary(&result, &remaining, config);
+
+    Ok(())
 }
 
 fn run_single_repo(path: &Path, config: &Config) -> Vec<repo::UpdateResult> {

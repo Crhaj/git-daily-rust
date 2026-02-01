@@ -32,7 +32,11 @@ pub trait Prompter: Send + Sync {
     /// Returns an error if the user cancels or on terminal I/O error.
     fn confirm(&self, prompt: &str, default: bool) -> anyhow::Result<bool>;
 
-    /// Requires the user to type a specific phrase to confirm.
+    /// Requires the user to type a specific phrase to confirm a high-risk action.
+    ///
+    /// Use this for destructive operations where a simple yes/no is too easy to
+    /// accidentally confirm (e.g., force-deleting unmerged branches that may
+    /// contain unrecoverable work).
     ///
     /// Returns `Ok(true)` only if the user types the exact `expected` string.
     ///

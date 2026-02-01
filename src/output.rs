@@ -2,6 +2,19 @@
 //!
 //! This module provides visual feedback during repository updates including
 //! spinners, progress bars, and colored summary output.
+//!
+//! # Module Organization
+//!
+//! This file exceeds the 400-line guideline and should be split into:
+//! - `output/mod.rs` - shared types and exports
+//! - `output/update.rs` - update callbacks, workspace progress
+//! - `output/cleanup.rs` - branch list formatting, cleanup summary
+//!
+//! The current organization groups related functionality together:
+//! - Lines 1-200: Update progress (single repo and workspace)
+//! - Lines 200-400: Summary formatting
+//! - Lines 400-700: Cleanup output functions
+//! - Lines 700+: Tests
 
 use crate::cleanup::{
     BranchInfo, CleanupResult, DeletionOutcome, DeletionResult, MergeStatus, TrackingStatus,
