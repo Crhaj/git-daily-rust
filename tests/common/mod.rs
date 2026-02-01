@@ -45,6 +45,11 @@ impl TestRepo {
         Self::new_with_branch("master")
     }
 
+    /// Creates a new test repository with an initial commit on main.
+    pub fn new_with_main() -> Result<Self> {
+        Self::new_with_branch("main")
+    }
+
     /// Creates a test repository with a configured remote.
     pub fn with_remote(branch: Option<&str>) -> Result<Self> {
         let branch = branch.unwrap_or("master");
@@ -112,6 +117,86 @@ impl TestRepo {
     /// Used for testing failure scenarios.
     pub fn remove_remote(&mut self) {
         self.remote_dir = None;
+    }
+
+    /// Checks out an existing branch.
+    pub fn checkout(&self, branch: &str) -> Result<()> {
+        run_git(&self.path, &test_config(), &["checkout", branch])?;
+        Ok(())
+    }
+
+    /// Creates and checks out a new branch.
+    pub fn checkout_new_branch(&self, name: &str) -> Result<()> {
+        run_git(&self.path, &test_config(), &["checkout", "-b", name])?;
+        Ok(())
+    }
+
+    /// Adds a commit to the current branch.
+    pub fn add_commit(&self, message: &str) -> Result<()> {
+        let filename = format!("{}.txt", message.replace(' ', "_"));
+        std::fs::write(self.path.join(&filename), format!("{}\n", message))?;
+        run_git(&self.path, &test_config(), &["add", &filename])?;
+        run_git(&self.path, &test_config(), &["commit", "-m", message])?;
+        Ok(())
+    }
+
+    /// Merges a branch into the current branch (regular merge).
+    pub fn merge(&self, branch: &str) -> Result<()> {
+        run_git(
+            &self.path,
+            &test_config(),
+            &[
+                "merge",
+                branch,
+                "--no-ff",
+                "-m",
+                &format!("Merge {}", branch),
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Squash merges a branch into the current branch.
+    pub fn squash_merge(&self, branch: &str) -> Result<()> {
+        run_git(&self.path, &test_config(), &["merge", "--squash", branch])?;
+        run_git(
+            &self.path,
+            &test_config(),
+            &["commit", "-m", &format!("Squash merge {}", branch)],
+        )?;
+        Ok(())
+    }
+
+    /// Checks if a branch exists.
+    pub fn branch_exists(&self, name: &str) -> bool {
+        run_git(
+            &self.path,
+            &test_config(),
+            &["rev-parse", "--verify", &format!("refs/heads/{}", name)],
+        )
+        .is_ok()
+    }
+
+    /// Gets the current branch name.
+    pub fn current_branch(&self) -> Result<String> {
+        let output = run_git(
+            &self.path,
+            &test_config(),
+            &["rev-parse", "--abbrev-ref", "HEAD"],
+        )?;
+        Ok(output.trim().to_string())
+    }
+
+    /// Deletes a branch (safe delete).
+    pub fn delete_branch(&self, name: &str) -> Result<()> {
+        run_git(&self.path, &test_config(), &["branch", "-d", name])?;
+        Ok(())
+    }
+
+    /// Force deletes a branch.
+    pub fn force_delete_branch(&self, name: &str) -> Result<()> {
+        run_git(&self.path, &test_config(), &["branch", "-D", name])?;
+        Ok(())
     }
 }
 
