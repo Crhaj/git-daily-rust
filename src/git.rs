@@ -550,7 +550,7 @@ mod tests {
 
     impl WaitableChild for FakeChild {
         fn try_wait(&mut self) -> io::Result<Option<std::process::ExitStatus>> {
-            self.try_wait.take().unwrap_or_else(|| Ok(None))
+            self.try_wait.take().unwrap_or(Ok(None))
         }
 
         fn read_stdout(&mut self) -> anyhow::Result<Vec<u8>> {
@@ -577,7 +577,7 @@ mod tests {
     #[test]
     fn test_wait_with_timeout_propagates_try_wait_error() {
         let mut child = FakeChild {
-            try_wait: Some(Err(io::Error::new(io::ErrorKind::Other, "boom"))),
+            try_wait: Some(Err(io::Error::other("boom"))),
             stdout: Vec::new(),
             stderr: Vec::new(),
         };

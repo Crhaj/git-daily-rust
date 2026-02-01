@@ -3,9 +3,7 @@
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
-use git_daily_rust::cleanup::{
-    self, BranchInfo, CleanupResult, DeletionMode, DeletionOutcome,
-};
+use git_daily_rust::cleanup::{self, BranchInfo, CleanupResult, DeletionMode, DeletionOutcome};
 use git_daily_rust::config::{Config, Verbosity};
 use git_daily_rust::constants::{DEFAULT_REPO_NAME, RAYON_THREAD_COUNT};
 use git_daily_rust::prompt::{Prompter, TerminalPrompter};
@@ -17,9 +15,7 @@ use std::path::Path;
 #[command(name = "git-daily-v2")]
 #[command(about = "Keep git repositories up to date and clean up stale branches.")]
 #[command(version)]
-#[command(
-    after_help = "EXIT CODES:\n  0  Success\n  1  Partial failure\n  2  Complete failure"
-)]
+#[command(after_help = "EXIT CODES:\n  0  Success\n  1  Partial failure\n  2  Complete failure")]
 struct Args {
     /// Show git commands being executed
     #[arg(short, long, global = true)]
