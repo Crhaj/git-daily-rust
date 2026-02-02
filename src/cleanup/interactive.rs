@@ -193,13 +193,24 @@ pub fn run_interactive(
             selected_branches.iter().map(|b| b.name.clone()).collect();
         callbacks.on_dry_run(&selected_branches);
 
+        // Update is_current flags if we switched branches
+        let remaining: Vec<BranchInfo> = branches
+            .into_iter()
+            .map(|mut b| {
+                if switched_from.is_some() {
+                    b.is_current = false;
+                }
+                b
+            })
+            .collect();
+
         return Ok(Some(InteractiveResult {
             result: CleanupResult {
                 main_branch: main_branch.to_string(),
                 deletions: vec![],
                 switched_from,
             },
-            remaining: branches,
+            remaining,
             dry_run: true,
             dry_run_branches,
         }));
@@ -241,9 +252,17 @@ pub fn run_interactive(
         .map(|d| d.branch.as_str())
         .collect();
 
+    // Update is_current flags: if we switched to main, no listed branch is current
+    // (main is excluded from the list since it's protected)
     let remaining: Vec<BranchInfo> = branches
         .into_iter()
         .filter(|b| !deleted_names.contains(b.name.as_str()))
+        .map(|mut b| {
+            if switched_from.is_some() {
+                b.is_current = false;
+            }
+            b
+        })
         .collect();
 
     let result = CleanupResult {
