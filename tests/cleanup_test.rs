@@ -4,14 +4,14 @@
 
 mod common;
 
-use common::{MockPrompter, TestRepo, test_config};
+use common::{TestRepo, test_config};
 use git_daily_rust::cleanup::{
     self, BranchInfo, DeletionMode, DeletionOutcome, MergeStatus, NoOpCleanupCallbacks,
     TrackingStatus,
 };
 use git_daily_rust::config::Config;
 use git_daily_rust::git::{self, GitLogger};
-use git_daily_rust::prompt::ConfirmAction;
+use git_daily_rust::prompt::{ConfirmAction, MockPrompter};
 
 /// Shorthand for the test logger (no-op for tests).
 fn logger() -> GitLogger {

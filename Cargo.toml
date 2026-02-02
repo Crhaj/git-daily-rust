@@ -1,11 +1,16 @@
 [package]
 name = "git-daily-rust"
-version = "0.2.3"
+version = "0.3.0"
 edition = "2024"
 
 [[bin]]
 name = "git-daily-v2"
 path = "src/main.rs"
+
+[features]
+default = []
+# Expose test utilities (MockPrompter) for integration tests
+test-utils = []
 
 [dependencies]
 anyhow = "1"
