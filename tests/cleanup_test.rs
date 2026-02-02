@@ -714,3 +714,45 @@ fn test_run_interactive_dry_run_does_not_delete() -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn test_run_interactive_deletes_current_branch_after_switch() -> anyhow::Result<()> {
+    let repo = TestRepo::new()?;
+    let config = test_config();
+
+    // Create and merge a feature branch, then stay on it
+    repo.checkout_new_branch("feature/current")?;
+    repo.add_commit("work")?;
+    repo.checkout("master")?;
+    repo.merge("feature/current")?;
+    repo.checkout("feature/current")?; // Switch back to feature branch
+
+    // Mock: select current branch, confirm switch, confirm delete
+    let prompter = MockPrompter::new()
+        .with_multi_select(vec![0])
+        .with_confirm(true) // confirm switch to master
+        .with_confirm_back(ConfirmAction::Yes); // confirm delete
+
+    let callbacks = NoOpCleanupCallbacks;
+
+    let result =
+        cleanup::run_interactive(repo.path(), false, &prompter, &callbacks, &config, logger())?;
+
+    let result = result.expect("should complete");
+    assert_eq!(
+        result.result.switched_from,
+        Some("feature/current".to_string())
+    );
+    assert_eq!(result.result.deletions.len(), 1);
+    assert!(
+        matches!(result.result.deletions[0].outcome, DeletionOutcome::Deleted),
+        "Current branch should be deleted after switch, got {:?}",
+        result.result.deletions[0].outcome
+    );
+    assert!(
+        !repo.branch_exists("feature/current"),
+        "Branch should be deleted"
+    );
+    assert_eq!(repo.current_branch()?, "master", "Should be on master now");
+    Ok(())
+}

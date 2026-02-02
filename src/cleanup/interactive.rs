@@ -183,15 +183,25 @@ pub fn run_interactive(
         None
     };
 
-    // Reconstruct selected branches from indices (branches may have been borrowed)
-    let selected_branches: Vec<&BranchInfo> =
-        selected_indices.iter().map(|&i| &branches[i]).collect();
+    // Reconstruct selected branches with updated is_current flags
+    // After switching, the old "current" branch is no longer current
+    let selected_branches: Vec<BranchInfo> = selected_indices
+        .iter()
+        .map(|&i| {
+            let mut branch = branches[i].clone();
+            if switched_from.is_some() {
+                branch.is_current = false;
+            }
+            branch
+        })
+        .collect();
+    let selected_branch_refs: Vec<&BranchInfo> = selected_branches.iter().collect();
 
     // Handle dry-run mode
     if dry_run {
         let dry_run_branches: Vec<String> =
             selected_branches.iter().map(|b| b.name.clone()).collect();
-        callbacks.on_dry_run(&selected_branches);
+        callbacks.on_dry_run(&selected_branch_refs);
 
         // Update is_current flags if we switched branches
         let remaining: Vec<BranchInfo> = branches
@@ -231,7 +241,7 @@ pub fn run_interactive(
 
     let deletions = delete_branches(
         repo,
-        &selected_branches,
+        &selected_branch_refs,
         deletion_mode,
         config,
         logger,
