@@ -756,3 +756,32 @@ fn test_run_interactive_deletes_current_branch_after_switch() -> anyhow::Result<
     assert_eq!(repo.current_branch()?, "master", "Should be on master now");
     Ok(())
 }
+
+#[test]
+fn test_run_interactive_works_without_remote() -> anyhow::Result<()> {
+    // Test that cleanup works even when fetch --prune fails (no remote)
+    let repo = TestRepo::new()?; // No remote configured
+    let config = test_config();
+
+    // Create a branch
+    repo.checkout_new_branch("feature/test")?;
+    repo.add_commit("work")?;
+    repo.checkout("master")?;
+    repo.merge("feature/test")?;
+
+    // Mock: select branch, confirm
+    let prompter = MockPrompter::new()
+        .with_multi_select(vec![0])
+        .with_confirm_back(ConfirmAction::Yes);
+
+    let callbacks = NoOpCleanupCallbacks;
+
+    // Should succeed even though fetch will fail (no remote)
+    let result =
+        cleanup::run_interactive(repo.path(), false, &prompter, &callbacks, &config, logger())?;
+
+    let result = result.expect("should complete despite fetch failure");
+    assert_eq!(result.result.deletions.len(), 1);
+    assert!(!repo.branch_exists("feature/test"));
+    Ok(())
+}

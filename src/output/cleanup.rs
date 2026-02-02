@@ -412,6 +412,12 @@ impl TerminalCleanupCallbacks {
 }
 
 impl CleanupCallbacks for TerminalCleanupCallbacks {
+    fn on_fetching(&self) {
+        if !self.config.is_quiet() {
+            eprintln!("Fetching latest changes...");
+        }
+    }
+
     fn on_analyzing(&self) {
         print_analyzing_branches(&self.config);
     }

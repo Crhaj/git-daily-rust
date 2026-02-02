@@ -189,12 +189,6 @@ pub fn has_uncommitted_changes(
         .context("Failed to check for uncommitted changes")
 }
 
-pub fn fetch_prune(repo: &Path, config: &Config, logger: GitLogger) -> anyhow::Result<()> {
-    run_git_with_logger(repo, config, &["fetch", "--prune"], logger)
-        .context("Failed to fetch from remote")?;
-    Ok(())
-}
-
 pub fn stash(repo: &Path, config: &Config, logger: GitLogger) -> anyhow::Result<bool> {
     let output =
         run_git_with_logger(repo, config, &["stash"], logger).context("Failed to stash changes")?;
@@ -227,6 +221,15 @@ pub fn pull(repo: &Path, config: &Config, branch: &str, logger: GitLogger) -> an
         logger,
     )
     .with_context(|| format!("Failed to pull '{}' from origin", branch))?;
+    Ok(())
+}
+
+/// Fetches from origin and prunes deleted remote branches.
+///
+/// This ensures local tracking refs are up-to-date before branch analysis.
+pub fn fetch_prune(repo: &Path, config: &Config, logger: GitLogger) -> anyhow::Result<()> {
+    run_git_with_logger(repo, config, &["fetch", "--prune"], logger)
+        .context("Failed to fetch and prune")?;
     Ok(())
 }
 

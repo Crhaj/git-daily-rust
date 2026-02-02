@@ -195,6 +195,9 @@ pub struct InteractiveResult {
 /// Allows the presentation layer to handle output without coupling
 /// the domain logic to specific output mechanisms.
 pub trait CleanupCallbacks {
+    /// Called when fetching/pruning begins.
+    fn on_fetching(&self);
+
     /// Called when analyzing branches begins.
     fn on_analyzing(&self);
 
@@ -237,6 +240,7 @@ pub trait CleanupCallbacks {
 pub struct NoOpCleanupCallbacks;
 
 impl CleanupCallbacks for NoOpCleanupCallbacks {
+    fn on_fetching(&self) {}
     fn on_analyzing(&self) {}
     fn on_detached_head(&self) {}
     fn on_no_branches(&self) {}

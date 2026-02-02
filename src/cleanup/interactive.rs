@@ -69,6 +69,15 @@ pub fn run_interactive(
     config: &Config,
     logger: GitLogger,
 ) -> anyhow::Result<Option<InteractiveResult>> {
+    // Fetch and prune to ensure accurate merge/tracking status
+    callbacks.on_fetching();
+    if let Err(e) = git::fetch_prune(repo, config, logger) {
+        // Non-fatal: continue even if fetch fails (e.g., no remote, offline)
+        if config.is_verbose() {
+            eprintln!("Warning: fetch --prune failed: {:#}", e);
+        }
+    }
+
     callbacks.on_analyzing();
 
     // Warn if in detached HEAD state

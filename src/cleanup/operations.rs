@@ -353,7 +353,8 @@ pub fn delete_single_branch(
             Err(e) => DeletionResult {
                 branch: branch.name.clone(),
                 outcome: DeletionOutcome::Failed {
-                    error: e.to_string(),
+                    // Use {:#} to show full error chain including git stderr
+                    error: format!("{:#}", e),
                 },
             },
         };
@@ -377,7 +378,8 @@ pub fn delete_single_branch(
         Err(e) => DeletionResult {
             branch: branch.name.clone(),
             outcome: DeletionOutcome::Failed {
-                error: e.to_string(),
+                // Use {:#} to show full error chain including git stderr
+                error: format!("{:#}", e),
             },
         },
     }
