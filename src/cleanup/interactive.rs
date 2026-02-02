@@ -73,8 +73,13 @@ pub fn run_interactive(
     callbacks.on_fetching();
     if let Err(e) = git::fetch_prune(repo, config, logger) {
         // Non-fatal: continue even if fetch fails (e.g., no remote, offline)
-        if config.is_verbose() {
-            eprintln!("Warning: fetch --prune failed: {:#}", e);
+        // Always warn (except quiet mode) so users know status might be stale
+        if !config.is_quiet() {
+            if config.is_verbose() {
+                eprintln!("Warning: fetch failed, branch status may be stale: {:#}", e);
+            } else {
+                eprintln!("Warning: fetch failed, branch status may be stale");
+            }
         }
     }
 
