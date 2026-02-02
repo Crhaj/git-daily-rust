@@ -76,6 +76,10 @@ pub fn run_interactive(
         callbacks.on_detached_head();
     }
 
+    // Detect main branch once upfront (avoid repeated git calls)
+    let main_branch =
+        detect_main_branch(repo, config, logger).context("Failed to detect main branch")?;
+
     // List all branches with their status
     let branches =
         list_branches(repo, config, logger).context("Failed to analyze branches for cleanup")?;
@@ -107,9 +111,6 @@ pub fn run_interactive(
         let current_branch_selected = selected.iter().find(|b| b.is_current).map(|b| &b.name);
 
         if let Some(current_name) = current_branch_selected {
-            let main_branch =
-                detect_main_branch(repo, config, logger).context("Failed to detect main branch")?;
-
             // Prevent switching to self (shouldn't happen, but defense-in-depth)
             if current_name == main_branch {
                 anyhow::bail!("Cannot delete '{}' - it is the main branch", current_name);
@@ -173,9 +174,6 @@ pub fn run_interactive(
 
     // Handle current branch switch - deferred from loop to avoid stale state on Back
     let switched_from = if let Some(current_name) = current_branch_name {
-        let main_branch =
-            detect_main_branch(repo, config, logger).context("Failed to detect main branch")?;
-
         git::checkout(repo, config, main_branch, logger)
             .context("Failed to switch to main branch")?;
 
@@ -197,9 +195,7 @@ pub fn run_interactive(
 
         return Ok(Some(InteractiveResult {
             result: CleanupResult {
-                main_branch: detect_main_branch(repo, config, logger)
-                    .context("Failed to detect main branch")?
-                    .to_string(),
+                main_branch: main_branch.to_string(),
                 deletions: vec![],
                 switched_from,
             },
@@ -251,9 +247,7 @@ pub fn run_interactive(
         .collect();
 
     let result = CleanupResult {
-        main_branch: detect_main_branch(repo, config, logger)
-            .context("Failed to detect main branch")?
-            .to_string(),
+        main_branch: main_branch.to_string(),
         deletions,
         switched_from,
     };
