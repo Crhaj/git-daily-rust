@@ -425,3 +425,121 @@ fn test_multiple_branches_listed_correctly() -> anyhow::Result<()> {
     assert!(empty.merge_status.is_safely_deletable()); // Empty branch = same as master
     Ok(())
 }
+
+#[test]
+fn test_is_detached_head_returns_false_on_branch() -> anyhow::Result<()> {
+    let repo = TestRepo::new()?;
+    let config = test_config();
+
+    // On master branch, should not be detached
+    assert!(
+        !cleanup::is_detached_head(repo.path(), &config, logger()),
+        "Should not be detached when on a branch"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_is_detached_head_returns_true_when_detached() -> anyhow::Result<()> {
+    let repo = TestRepo::new()?;
+    let config = test_config();
+
+    // Detach HEAD by checking out a commit directly
+    let head_commit = git::run_git(repo.path(), &config, &["rev-parse", "HEAD"])?;
+    git::run_git(repo.path(), &config, &["checkout", head_commit.trim()])?;
+
+    assert!(
+        cleanup::is_detached_head(repo.path(), &config, logger()),
+        "Should be detached after checking out a commit"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_delete_branches_batch_continues_on_failure() -> anyhow::Result<()> {
+    let repo = TestRepo::new()?;
+    let config = test_config();
+
+    // Create multiple branches
+    repo.checkout_new_branch("feature/first")?;
+    repo.add_commit("first work")?;
+    repo.checkout("master")?;
+    repo.merge("feature/first")?;
+
+    repo.checkout_new_branch("feature/second")?;
+    repo.add_commit("second work")?;
+    repo.checkout("master")?;
+    repo.merge("feature/second")?;
+
+    let branches = list_branches(&repo, &config)?;
+    let branch_refs: Vec<&cleanup::BranchInfo> = branches.iter().collect();
+
+    // Track results via callback
+    let mut callback_count = 0;
+    let results = cleanup::delete_branches(
+        repo.path(),
+        &branch_refs,
+        cleanup::DeletionMode::Safe,
+        &config,
+        logger(),
+        |_result| callback_count += 1,
+    );
+
+    assert_eq!(results.len(), 2, "Should have 2 deletion results");
+    assert_eq!(
+        callback_count, 2,
+        "Callback should be called for each branch"
+    );
+    assert!(
+        !repo.branch_exists("feature/first"),
+        "First branch should be deleted"
+    );
+    assert!(
+        !repo.branch_exists("feature/second"),
+        "Second branch should be deleted"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_unclear_status_branches_detected() -> anyhow::Result<()> {
+    // This test verifies that branches with conflicts during merge-tree
+    // are marked as Unclear, not Unmerged.
+    //
+    // Setup: Create a branch, squash-merge it, then modify the same file
+    // on master. The original branch will have "unclear" status because
+    // merge-tree shows conflicts, but the changes might be in master.
+    let repo = TestRepo::new()?;
+    let config = test_config();
+
+    // Create feature branch modifying README
+    repo.checkout_new_branch("feature/conflict-test")?;
+    std::fs::write(repo.path().join("README.md"), "# Feature Content\n")?;
+    git::run_git(repo.path(), &config, &["add", "README.md"])?;
+    git::run_git(repo.path(), &config, &["commit", "-m", "modify readme"])?;
+
+    // Squash merge to master
+    repo.checkout("master")?;
+    repo.squash_merge("feature/conflict-test")?;
+
+    // Now modify the same file on master again (creates conflict scenario)
+    std::fs::write(repo.path().join("README.md"), "# Master Content\n")?;
+    git::run_git(repo.path(), &config, &["add", "README.md"])?;
+    git::run_git(
+        repo.path(),
+        &config,
+        &["commit", "-m", "master modifies readme"],
+    )?;
+
+    // List branches - feature/conflict-test should be unclear
+    let branches = list_branches(&repo, &config)?;
+    let feature = find_branch(&branches, "feature/conflict-test")
+        .expect("conflict-test branch should be listed");
+
+    assert!(
+        feature.merge_status.is_uncertain(),
+        "Branch with conflicting changes should be unclear, got {:?}",
+        feature.merge_status
+    );
+    Ok(())
+}

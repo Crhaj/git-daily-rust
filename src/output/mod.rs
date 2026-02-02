@@ -7,11 +7,11 @@ mod cleanup;
 mod summary;
 mod update;
 
-// Re-export cleanup output functions
+// Re-export cleanup output functions and callbacks
 pub use cleanup::{
-    BranchListWidths, format_branch_line, print_analyzing_branches, print_branch_list,
-    print_branch_list_header, print_cleanup_summary, print_deleting_header, print_deletion_result,
-    print_no_branches_to_clean,
+    BranchListWidths, TerminalCleanupCallbacks, format_branch_line, print_analyzing_branches,
+    print_branch_list, print_branch_list_header, print_cleanup_summary, print_deleting_header,
+    print_deletion_result, print_no_branches_to_clean,
 };
 
 // Re-export summary functions

@@ -2,6 +2,19 @@
 //!
 //! Core types and functions for analyzing and deleting stale local branches.
 //! Supports detection of both regular merges and squash merges.
+//!
+//! # Architecture
+//!
+//! This module contains:
+//! - Core types (`BranchInfo`, `MergeStatus`, `CleanupResult`, etc.)
+//! - Git operations for branch analysis
+//! - Interactive orchestration via [`run_interactive`]
+//!
+//! The interactive flow is decoupled from terminal I/O via the [`Prompter`] trait,
+//! enabling full testability with [`MockPrompter`].
+//!
+//! [`Prompter`]: crate::prompt::Prompter
+//! [`MockPrompter`]: crate::prompt::MockPrompter
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -11,6 +24,7 @@ use anyhow::Context;
 use crate::config::Config;
 use crate::constants::{MAIN_BRANCH, MASTER_BRANCH};
 use crate::git::{self, GitLogger};
+use crate::prompt::{ConfirmAction, Prompter};
 
 // Git conflict markers (7 characters each)
 const CONFLICT_START: &str = "<<<<<<<";
@@ -32,6 +46,19 @@ pub struct BranchInfo {
 }
 
 /// The merge status of a branch relative to the main branch.
+///
+/// # Squash-Merge Detection
+///
+/// Git's `branch --merged` only detects traditional merges. Squash merges
+/// rewrite commits, so the branch appears unmerged even though its changes
+/// are in main. We detect these using `git merge-tree`, which simulates
+/// a merge - if it produces no diff, the changes are already present.
+///
+/// # Safety Levels
+///
+/// - **Safe** (`Merged`, `SquashMerged`): No data loss risk
+/// - **Uncertain** (`Unclear`): Conflicts prevent verification; may be squash-merged
+/// - **Dangerous** (`Unmerged`): Definitely has unique, potentially unrecoverable work
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use]
 pub enum MergeStatus {
@@ -312,6 +339,15 @@ pub fn check_tracking_status(
 ///
 /// Excludes protected branches (master/main) from the list.
 ///
+/// # Performance
+///
+/// - O(1) lookup for traditional merges (pre-computed `git branch --merged`)
+/// - O(U * 2) git calls for unmerged branches (merge-base + merge-tree each)
+/// - O(N) git calls for remote tracking status (one per branch)
+///
+/// For repositories with hundreds of branches, consider batch-fetching
+/// remote refs with `git ls-remote --heads origin` upfront.
+///
 /// # Errors
 ///
 /// Returns an error if:
@@ -416,6 +452,14 @@ fn get_current_branch_name(repo: &Path, config: &Config, logger: GitLogger) -> O
         .filter(|b| b != "HEAD")
 }
 
+/// Returns true if the repository is in detached HEAD state.
+///
+/// This is useful for warning users that they may accidentally delete
+/// the branch they were previously on.
+pub fn is_detached_head(repo: &Path, config: &Config, logger: GitLogger) -> bool {
+    get_current_branch_name(repo, config, logger).is_none()
+}
+
 /// Parses a line from `git for-each-ref` output into (name, upstream).
 fn parse_branch_line(line: &str) -> (&str, &str) {
     let mut parts = line.split('|');
@@ -507,6 +551,317 @@ pub fn delete_single_branch(
             },
         },
     }
+}
+
+/// Deletes multiple branches, continuing on failure.
+///
+/// Calls `on_result` after each deletion to allow progress reporting.
+/// Returns all deletion results.
+///
+/// # Arguments
+///
+/// * `branches` - The branches to delete
+/// * `mode` - Whether to force-delete unmerged branches
+/// * `on_result` - Called after each deletion with the result
+pub fn delete_branches<F>(
+    repo: &Path,
+    branches: &[&BranchInfo],
+    mode: DeletionMode,
+    config: &Config,
+    logger: GitLogger,
+    mut on_result: F,
+) -> Vec<DeletionResult>
+where
+    F: FnMut(&DeletionResult),
+{
+    let mut results = Vec::with_capacity(branches.len());
+    for branch in branches {
+        let result = delete_single_branch(repo, branch, mode, config, logger);
+        on_result(&result);
+        results.push(result);
+    }
+    results
+}
+
+/// The result of the interactive cleanup flow.
+///
+/// Contains all information needed for the presentation layer to display
+/// results and summary.
+#[derive(Debug)]
+pub struct InteractiveResult {
+    /// The cleanup result with deletions and metadata.
+    pub result: CleanupResult,
+    /// Branches remaining after cleanup (for summary display).
+    pub remaining: Vec<BranchInfo>,
+    /// Whether dry-run mode was active (no actual deletions).
+    pub dry_run: bool,
+    /// Branches that would have been deleted in dry-run mode.
+    pub dry_run_branches: Vec<String>,
+}
+
+/// Callback trait for cleanup progress reporting.
+///
+/// Allows the presentation layer to handle output without coupling
+/// the domain logic to specific output mechanisms.
+pub trait CleanupCallbacks {
+    /// Called when analyzing branches begins.
+    fn on_analyzing(&self);
+
+    /// Called when a detached HEAD state is detected.
+    fn on_detached_head(&self);
+
+    /// Called when no branches are available to clean.
+    fn on_no_branches(&self);
+
+    /// Called to display the branch list before selection.
+    fn on_branch_list(&self, branches: &[BranchInfo]);
+
+    /// Called when the user selects their current branch for deletion.
+    fn on_current_branch_selected(&self, branch_name: &str);
+
+    /// Called after switching away from the current branch.
+    fn on_switched_branch(&self, to_branch: &str);
+
+    /// Called when unclear branches are selected (warning).
+    fn on_unclear_warning(&self);
+
+    /// Called before deletion begins.
+    fn on_deleting(&self);
+
+    /// Called after each branch deletion.
+    fn on_deletion_result(&self, result: &DeletionResult);
+
+    /// Called when the user cancels the operation.
+    fn on_cancelled(&self);
+
+    /// Called in dry-run mode to show what would be deleted.
+    fn on_dry_run(&self, branches: &[&BranchInfo]);
+}
+
+/// Runs the interactive branch cleanup flow.
+///
+/// This is the main orchestration function that handles:
+/// - Branch listing and analysis
+/// - User selection with back-navigation
+/// - Current branch switching
+/// - Three-tier confirmation (safe/unclear/unmerged)
+/// - Deletion with progress reporting
+///
+/// # Architecture
+///
+/// This function lives in the domain layer but accepts trait objects for:
+/// - `prompter`: User interaction (testable with `MockPrompter`)
+/// - `callbacks`: Progress reporting (decouples from presentation)
+///
+/// # Arguments
+///
+/// * `repo` - Path to the git repository
+/// * `dry_run` - If true, show what would be deleted without deleting
+/// * `prompter` - Implementation of interactive prompts
+/// * `callbacks` - Implementation of progress callbacks
+/// * `config` - Application configuration
+/// * `logger` - Git command logger
+///
+/// # Returns
+///
+/// Returns `Ok(Some(result))` on successful completion, `Ok(None)` if the user
+/// cancelled, or `Err` on failure.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - Git commands fail
+/// - Neither master nor main branch exists
+/// - Prompt interaction fails (e.g., terminal error)
+pub fn run_interactive(
+    repo: &Path,
+    dry_run: bool,
+    prompter: &dyn Prompter,
+    callbacks: &dyn CleanupCallbacks,
+    config: &Config,
+    logger: GitLogger,
+) -> anyhow::Result<Option<InteractiveResult>> {
+    callbacks.on_analyzing();
+
+    // Warn if in detached HEAD state
+    if is_detached_head(repo, config, logger) {
+        callbacks.on_detached_head();
+    }
+
+    // List all branches with their status
+    let branches =
+        list_branches(repo, config, logger).context("Failed to analyze branches for cleanup")?;
+
+    if branches.is_empty() {
+        callbacks.on_no_branches();
+        return Ok(None);
+    }
+
+    // Selection loop - allows user to go back and re-select
+    let (selected_indices, switched_from, has_dangerous) = loop {
+        callbacks.on_branch_list(&branches);
+
+        // Build selection items for prompt
+        let items: Vec<&str> = branches.iter().map(|b| b.name.as_str()).collect();
+
+        // Get user selection
+        let selected_indices = prompter.multi_select("\nSelect branches to delete", &items)?;
+
+        if selected_indices.is_empty() {
+            callbacks.on_cancelled();
+            return Ok(None);
+        }
+
+        let selected: Vec<&BranchInfo> = selected_indices.iter().map(|&i| &branches[i]).collect();
+
+        // Check if current branch is selected - need to switch away first
+        let current_branch_selected = selected.iter().find(|b| b.is_current);
+        let mut switched_from: Option<String> = None;
+
+        if let Some(current) = current_branch_selected {
+            let main_branch =
+                detect_main_branch(repo, config, logger).context("Failed to detect main branch")?;
+
+            // Prevent switching to self (shouldn't happen, but defense-in-depth)
+            if current.name == main_branch {
+                anyhow::bail!("Cannot delete '{}' - it is the main branch", current.name);
+            }
+
+            callbacks.on_current_branch_selected(&current.name);
+
+            let switch_confirmed =
+                prompter.confirm(&format!("Switch to '{}' to continue?", main_branch), true)?;
+
+            if !switch_confirmed {
+                callbacks.on_cancelled();
+                return Ok(None);
+            }
+
+            // Switch to main branch
+            git::checkout(repo, config, main_branch, logger)
+                .context("Failed to switch to main branch")?;
+
+            callbacks.on_switched_branch(main_branch);
+            switched_from = Some(current.name.clone());
+        }
+
+        // Three-tier safety check
+        let has_definitely_unmerged = selected.iter().any(|b| b.merge_status.requires_caution());
+        let has_unclear = selected.iter().any(|b| b.merge_status.is_uncertain());
+
+        let action = if has_definitely_unmerged {
+            // Highest risk: definitely unmerged branches
+            let typed_correctly = prompter.type_to_confirm(
+                "You selected unmerged branches. Type 'delete' to confirm",
+                "delete",
+            )?;
+
+            if typed_correctly {
+                ConfirmAction::Yes
+            } else {
+                prompter.confirm_with_back("Confirmation failed. What would you like to do?")?
+            }
+        } else if has_unclear {
+            // Medium risk: unclear branches
+            callbacks.on_unclear_warning();
+            prompter.confirm_with_back(&format!(
+                "Delete {} branch(es) including unclear status?",
+                selected.len()
+            ))?
+        } else {
+            // Low risk: all safely deletable
+            prompter.confirm_with_back(&format!("Delete {} branch(es)?", selected.len()))?
+        };
+
+        match action {
+            ConfirmAction::Yes => break (selected_indices, switched_from, has_definitely_unmerged),
+            ConfirmAction::No => {
+                callbacks.on_cancelled();
+                return Ok(None);
+            }
+            ConfirmAction::Back => continue,
+        }
+    };
+
+    // Reconstruct selected branches from indices (branches may have been borrowed)
+    let selected_branches: Vec<&BranchInfo> =
+        selected_indices.iter().map(|&i| &branches[i]).collect();
+
+    // Handle dry-run mode
+    if dry_run {
+        let dry_run_branches: Vec<String> =
+            selected_branches.iter().map(|b| b.name.clone()).collect();
+        callbacks.on_dry_run(&selected_branches);
+
+        return Ok(Some(InteractiveResult {
+            result: CleanupResult {
+                main_branch: detect_main_branch(repo, config, logger)
+                    .context("Failed to detect main branch")?
+                    .to_string(),
+                deletions: vec![],
+                switched_from,
+            },
+            remaining: branches,
+            dry_run: true,
+            dry_run_branches,
+        }));
+    }
+
+    // Perform deletions
+    callbacks.on_deleting();
+
+    let has_non_safe = selected_branches
+        .iter()
+        .any(|b| !b.merge_status.is_safely_deletable());
+
+    let deletion_mode = if has_dangerous || has_non_safe {
+        DeletionMode::Force
+    } else {
+        DeletionMode::Safe
+    };
+
+    let deletions = delete_branches(
+        repo,
+        &selected_branches,
+        deletion_mode,
+        config,
+        logger,
+        |r| {
+            callbacks.on_deletion_result(r);
+        },
+    );
+
+    // Calculate remaining branches
+    let deleted_names: HashSet<_> = deletions
+        .iter()
+        .filter(|d| {
+            matches!(
+                d.outcome,
+                DeletionOutcome::Deleted | DeletionOutcome::ForceDeleted
+            )
+        })
+        .map(|d| d.branch.as_str())
+        .collect();
+
+    let remaining: Vec<BranchInfo> = branches
+        .into_iter()
+        .filter(|b| !deleted_names.contains(b.name.as_str()))
+        .collect();
+
+    let result = CleanupResult {
+        main_branch: detect_main_branch(repo, config, logger)
+            .context("Failed to detect main branch")?
+            .to_string(),
+        deletions,
+        switched_from,
+    };
+
+    Ok(Some(InteractiveResult {
+        result,
+        remaining,
+        dry_run: false,
+        dry_run_branches: vec![],
+    }))
 }
 
 #[cfg(test)]

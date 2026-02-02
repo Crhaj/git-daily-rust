@@ -6,6 +6,20 @@
 use anyhow::Context;
 use dialoguer::{Confirm, Input, MultiSelect, Select};
 
+/// Result of a confirmation prompt that offers a "back" option.
+///
+/// Used for flows where the user may want to return to a previous step
+/// rather than simply confirming or cancelling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfirmAction {
+    /// User confirmed the action.
+    Yes,
+    /// User declined the action.
+    No,
+    /// User wants to go back to the previous step.
+    Back,
+}
+
 /// Abstraction for interactive user prompts.
 ///
 /// Implementations provide either real terminal interaction ([`TerminalPrompter`])
@@ -44,6 +58,16 @@ pub trait Prompter: Send + Sync {
     ///
     /// Returns an error if the user cancels or on terminal I/O error.
     fn type_to_confirm(&self, prompt: &str, expected: &str) -> anyhow::Result<bool>;
+
+    /// Asks a confirmation question with an option to go back.
+    ///
+    /// Used in multi-step flows where the user may want to return to a
+    /// previous step (e.g., re-select branches) rather than just cancelling.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the user cancels (Esc) or on terminal I/O error.
+    fn confirm_with_back(&self, prompt: &str) -> anyhow::Result<ConfirmAction>;
 }
 
 /// Terminal-based prompter using dialoguer.
@@ -83,6 +107,22 @@ impl Prompter for TerminalPrompter {
 
         Ok(input.trim() == expected)
     }
+
+    fn confirm_with_back(&self, prompt: &str) -> anyhow::Result<ConfirmAction> {
+        let options = ["Yes", "No", "Back to selection"];
+        let selection = Select::new()
+            .with_prompt(prompt)
+            .items(options)
+            .default(0)
+            .interact()
+            .context("Confirm prompt failed")?;
+
+        Ok(match selection {
+            0 => ConfirmAction::Yes,
+            1 => ConfirmAction::No,
+            _ => ConfirmAction::Back,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -106,6 +146,7 @@ mod mock {
         select_responses: Mutex<VecDeque<anyhow::Result<usize>>>,
         confirm_responses: Mutex<VecDeque<anyhow::Result<bool>>>,
         type_confirm_responses: Mutex<VecDeque<anyhow::Result<bool>>>,
+        confirm_with_back_responses: Mutex<VecDeque<anyhow::Result<ConfirmAction>>>,
     }
 
     impl MockPrompter {
@@ -117,6 +158,7 @@ mod mock {
                 select_responses: Mutex::new(VecDeque::new()),
                 confirm_responses: Mutex::new(VecDeque::new()),
                 type_confirm_responses: Mutex::new(VecDeque::new()),
+                confirm_with_back_responses: Mutex::new(VecDeque::new()),
             }
         }
 
@@ -200,6 +242,26 @@ mod mock {
             self
         }
 
+        /// Queues a successful confirm-with-back response.
+        #[must_use]
+        pub fn with_confirm_back(self, action: ConfirmAction) -> Self {
+            self.confirm_with_back_responses
+                .lock()
+                .expect("MockPrompter mutex poisoned")
+                .push_back(Ok(action));
+            self
+        }
+
+        /// Queues a confirm-with-back error response.
+        #[must_use]
+        pub fn with_confirm_back_err(self, error: &str) -> Self {
+            self.confirm_with_back_responses
+                .lock()
+                .expect("MockPrompter mutex poisoned")
+                .push_back(Err(anyhow::anyhow!("{}", error)));
+            self
+        }
+
         /// Asserts all queued responses have been consumed.
         ///
         /// # Panics
@@ -226,12 +288,17 @@ mod mock {
                 .lock()
                 .expect("MockPrompter mutex poisoned")
                 .len();
+            let confirm_back = self
+                .confirm_with_back_responses
+                .lock()
+                .expect("MockPrompter mutex poisoned")
+                .len();
 
-            let total = multi + select + confirm + type_confirm;
+            let total = multi + select + confirm + type_confirm + confirm_back;
             assert_eq!(
                 total, 0,
-                "MockPrompter has {} unconsumed responses (multi_select: {}, select: {}, confirm: {}, type_confirm: {})",
-                total, multi, select, confirm, type_confirm
+                "MockPrompter has {} unconsumed responses (multi_select: {}, select: {}, confirm: {}, type_confirm: {}, confirm_back: {})",
+                total, multi, select, confirm, type_confirm, confirm_back
             );
         }
     }
@@ -273,6 +340,14 @@ mod mock {
                 .expect("MockPrompter mutex poisoned")
                 .pop_front()
                 .expect("MockPrompter: no type_to_confirm response queued")
+        }
+
+        fn confirm_with_back(&self, _prompt: &str) -> anyhow::Result<ConfirmAction> {
+            self.confirm_with_back_responses
+                .lock()
+                .expect("MockPrompter mutex poisoned")
+                .pop_front()
+                .expect("MockPrompter: no confirm_with_back response queued")
         }
     }
 }
@@ -381,5 +456,50 @@ mod tests {
         // Second, confirm not consumed
 
         mock.assert_all_consumed();
+    }
+
+    #[test]
+    fn test_confirm_action_equality() {
+        assert_eq!(ConfirmAction::Yes, ConfirmAction::Yes);
+        assert_eq!(ConfirmAction::No, ConfirmAction::No);
+        assert_eq!(ConfirmAction::Back, ConfirmAction::Back);
+        assert_ne!(ConfirmAction::Yes, ConfirmAction::No);
+        assert_ne!(ConfirmAction::Yes, ConfirmAction::Back);
+    }
+
+    #[test]
+    fn test_mock_confirm_with_back_returns_configured_actions() {
+        let mock = MockPrompter::new()
+            .with_confirm_back(ConfirmAction::Yes)
+            .with_confirm_back(ConfirmAction::No)
+            .with_confirm_back(ConfirmAction::Back);
+
+        assert_eq!(
+            mock.confirm_with_back("Delete?").unwrap(),
+            ConfirmAction::Yes
+        );
+        assert_eq!(
+            mock.confirm_with_back("Delete?").unwrap(),
+            ConfirmAction::No
+        );
+        assert_eq!(
+            mock.confirm_with_back("Delete?").unwrap(),
+            ConfirmAction::Back
+        );
+        mock.assert_all_consumed();
+    }
+
+    #[test]
+    fn test_mock_confirm_with_back_error_injection() {
+        let mock = MockPrompter::new().with_confirm_back_err("cancelled");
+
+        assert!(mock.confirm_with_back("Delete?").is_err());
+    }
+
+    #[test]
+    #[should_panic(expected = "no confirm_with_back response queued")]
+    fn test_mock_confirm_with_back_panics_when_exhausted() {
+        let mock = MockPrompter::new();
+        let _ = mock.confirm_with_back("Delete?");
     }
 }

@@ -3,7 +3,8 @@
 use colored::Colorize;
 
 use crate::cleanup::{
-    BranchInfo, CleanupResult, DeletionOutcome, DeletionResult, MergeStatus, TrackingStatus,
+    BranchInfo, CleanupCallbacks, CleanupResult, DeletionOutcome, DeletionResult, MergeStatus,
+    TrackingStatus,
 };
 use crate::config::Config;
 
@@ -291,6 +292,16 @@ fn build_cleanup_summary(result: &CleanupResult, remaining: &[BranchInfo]) -> St
     output.push_str(&format!("{}\n", centered_title.cyan().bold()));
     output.push_str(&format!("{}\n\n", line.cyan()));
 
+    // Note if we switched branches
+    if let Some(from_branch) = &result.switched_from {
+        output.push_str(&format!(
+            "{}: Switched from '{}' to '{}'\n\n",
+            "Note".cyan(),
+            from_branch,
+            result.main_branch
+        ));
+    }
+
     // Partition results
     let (deleted, rest): (Vec<_>, Vec<_>) = result.deletions.iter().partition(|d| {
         matches!(
@@ -381,6 +392,93 @@ fn build_cleanup_summary(result: &CleanupResult, remaining: &[BranchInfo]) -> St
     }
 
     output
+}
+
+/// Terminal-based cleanup callbacks.
+///
+/// Implements [`CleanupCallbacks`] with colored terminal output.
+/// Respects quiet mode by suppressing non-error output.
+#[derive(Debug, Clone, Copy)]
+pub struct TerminalCleanupCallbacks {
+    config: Config,
+}
+
+impl TerminalCleanupCallbacks {
+    /// Creates a new terminal callbacks instance.
+    #[must_use]
+    pub fn new(config: Config) -> Self {
+        Self { config }
+    }
+}
+
+impl CleanupCallbacks for TerminalCleanupCallbacks {
+    fn on_analyzing(&self) {
+        print_analyzing_branches(&self.config);
+    }
+
+    fn on_detached_head(&self) {
+        if !self.config.is_quiet() {
+            eprintln!(
+                "{}: Repository is in detached HEAD state. All branches can be selected.",
+                "Note".cyan()
+            );
+        }
+    }
+
+    fn on_no_branches(&self) {
+        print_no_branches_to_clean(&self.config);
+    }
+
+    fn on_branch_list(&self, branches: &[BranchInfo]) {
+        print_branch_list(branches, &self.config);
+    }
+
+    fn on_current_branch_selected(&self, branch_name: &str) {
+        if !self.config.is_quiet() {
+            eprintln!(
+                "\nYou selected '{}', which is your current branch.",
+                branch_name
+            );
+        }
+    }
+
+    fn on_switched_branch(&self, to_branch: &str) {
+        if !self.config.is_quiet() {
+            eprintln!("Switched to '{}'.", to_branch);
+        }
+    }
+
+    fn on_unclear_warning(&self) {
+        if !self.config.is_quiet() {
+            eprintln!(
+                "\n{}: Some branches have 'unclear' status (may be squash-merged but can't verify).",
+                "Note".yellow()
+            );
+        }
+    }
+
+    fn on_deleting(&self) {
+        print_deleting_header(&self.config);
+    }
+
+    fn on_deletion_result(&self, result: &DeletionResult) {
+        print_deletion_result(result, &self.config);
+    }
+
+    fn on_cancelled(&self) {
+        if !self.config.is_quiet() {
+            eprintln!("Cancelled.");
+        }
+    }
+
+    fn on_dry_run(&self, branches: &[&BranchInfo]) {
+        if !self.config.is_quiet() {
+            eprintln!("\n{}", "Dry run - no branches deleted.".yellow());
+            for branch in branches {
+                eprintln!("  Would delete: {}", branch.name);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -636,5 +734,18 @@ mod tests {
         let remaining = vec![make_branch("develop", true, MergeStatus::Unmerged)];
         let output = build_cleanup_summary(&result, &remaining);
         assert!(output.contains("(current)"));
+    }
+
+    #[test]
+    fn test_build_cleanup_summary_shows_switched_from() {
+        let result = CleanupResult {
+            main_branch: "master".to_string(),
+            deletions: vec![make_deletion("feature/old", DeletionOutcome::Deleted)],
+            switched_from: Some("feature/old".to_string()),
+        };
+        let output = build_cleanup_summary(&result, &[]);
+        assert!(output.contains("Switched from"));
+        assert!(output.contains("feature/old"));
+        assert!(output.contains("master"));
     }
 }

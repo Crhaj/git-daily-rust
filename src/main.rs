@@ -1,12 +1,10 @@
 //! CLI entry point for git-daily-v2.
 
-use anyhow::Context;
 use clap::{Parser, Subcommand};
-use colored::Colorize;
-use git_daily_rust::cleanup::{self, BranchInfo, CleanupResult, DeletionMode, DeletionOutcome};
+use git_daily_rust::cleanup;
 use git_daily_rust::config::{Config, Verbosity};
 use git_daily_rust::constants::{DEFAULT_REPO_NAME, RAYON_THREAD_COUNT};
-use git_daily_rust::prompt::{Prompter, TerminalPrompter};
+use git_daily_rust::prompt::TerminalPrompter;
 use git_daily_rust::repo::UpdateOutcome;
 use git_daily_rust::{output, repo};
 use std::path::Path;
@@ -88,6 +86,10 @@ fn run_update(cwd: &Path, config: &Config) -> anyhow::Result<()> {
     std::process::exit(compute_exit_code(&results));
 }
 
+/// Runs the interactive branch cleanup flow.
+///
+/// This function is purely wiring - it creates the necessary dependencies
+/// and delegates to the domain layer's `cleanup::run_interactive`.
 fn run_cleanup(cwd: &Path, dry_run: bool, config: &Config) -> anyhow::Result<()> {
     if !repo::is_git_repo(cwd) {
         anyhow::bail!("Not a git repository. Cleanup only works inside a git repo.");
@@ -95,114 +97,21 @@ fn run_cleanup(cwd: &Path, dry_run: bool, config: &Config) -> anyhow::Result<()>
 
     let logger = config.git_logger();
     let prompter = TerminalPrompter;
+    let callbacks = output::TerminalCleanupCallbacks::new(*config);
 
-    output::print_analyzing_branches(config);
+    // Delegate to domain layer - all business logic lives there
+    let result = cleanup::run_interactive(cwd, dry_run, &prompter, &callbacks, config, logger)?;
 
-    // List all branches with their status
-    let branches = cleanup::list_branches(cwd, config, logger)
-        .context("Failed to analyze branches for cleanup")?;
-
-    if branches.is_empty() {
-        output::print_no_branches_to_clean(config);
-        return Ok(());
+    // Print summary if we have results (not cancelled, not dry-run)
+    if let Some(interactive_result) = result
+        && !interactive_result.dry_run
+    {
+        output::print_cleanup_summary(
+            &interactive_result.result,
+            &interactive_result.remaining,
+            config,
+        );
     }
-
-    // Display branch list
-    output::print_branch_list(&branches, config);
-
-    // Build selection items for prompt
-    let items: Vec<&str> = branches.iter().map(|b| b.name.as_str()).collect();
-
-    // Get user selection
-    let selected_indices = prompter.multi_select("\nSelect branches to delete", &items)?;
-
-    if selected_indices.is_empty() {
-        if !config.is_quiet() {
-            eprintln!("No branches selected.");
-        }
-        return Ok(());
-    }
-
-    let selected_branches: Vec<&BranchInfo> =
-        selected_indices.iter().map(|&i| &branches[i]).collect();
-
-    // Check for unmerged branches
-    let has_unmerged = selected_branches
-        .iter()
-        .any(|b| b.merge_status.requires_caution() || b.merge_status.is_uncertain());
-
-    // Confirm deletion
-    let confirmed = if has_unmerged {
-        prompter.type_to_confirm(
-            "You selected unmerged branches. Type 'delete' to confirm",
-            "delete",
-        )?
-    } else {
-        prompter.confirm(
-            &format!("Delete {} branch(es)?", selected_branches.len()),
-            false,
-        )?
-    };
-
-    if !confirmed {
-        if !config.is_quiet() {
-            eprintln!("Cancelled.");
-        }
-        return Ok(());
-    }
-
-    if dry_run {
-        if !config.is_quiet() {
-            eprintln!("\n{}", "Dry run - no branches deleted.".yellow());
-            for branch in &selected_branches {
-                eprintln!("  Would delete: {}", branch.name);
-            }
-        }
-        return Ok(());
-    }
-
-    // Perform deletions
-    output::print_deleting_header(config);
-
-    let deletion_mode = if has_unmerged {
-        DeletionMode::Force
-    } else {
-        DeletionMode::Safe
-    };
-
-    let mut deletions = Vec::with_capacity(selected_branches.len());
-    for branch in &selected_branches {
-        let result = cleanup::delete_single_branch(cwd, branch, deletion_mode, config, logger);
-        output::print_deletion_result(&result, config);
-        deletions.push(result);
-    }
-
-    // Calculate remaining branches
-    let deleted_names: std::collections::HashSet<_> = deletions
-        .iter()
-        .filter(|d| {
-            matches!(
-                d.outcome,
-                DeletionOutcome::Deleted | DeletionOutcome::ForceDeleted
-            )
-        })
-        .map(|d| d.branch.as_str())
-        .collect();
-
-    let remaining: Vec<BranchInfo> = branches
-        .into_iter()
-        .filter(|b| !deleted_names.contains(b.name.as_str()))
-        .collect();
-
-    let result = CleanupResult {
-        main_branch: cleanup::detect_main_branch(cwd, config, logger)
-            .context("Failed to detect main branch")?
-            .to_string(),
-        deletions,
-        switched_from: None,
-    };
-
-    output::print_cleanup_summary(&result, &remaining, config);
 
     Ok(())
 }
