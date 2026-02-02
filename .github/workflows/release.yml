@@ -1,0 +1,81 @@
+name: release
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # Only run for releasable conventional commits (feat/fix/perf)
+    if: >-
+      startsWith(github.event.head_commit.message, 'feat:') ||
+      startsWith(github.event.head_commit.message, 'feat(') ||
+      startsWith(github.event.head_commit.message, 'feat!') ||
+      startsWith(github.event.head_commit.message, 'fix:') ||
+      startsWith(github.event.head_commit.message, 'fix(') ||
+      startsWith(github.event.head_commit.message, 'fix!') ||
+      startsWith(github.event.head_commit.message, 'perf:') ||
+      startsWith(github.event.head_commit.message, 'perf(') ||
+      startsWith(github.event.head_commit.message, 'perf!')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Install git-cliff
+        uses: taiki-e/install-action@git-cliff
+
+      - name: Calculate next version
+        id: version
+        run: |
+          CURRENT=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          echo "current=$CURRENT"
+
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          COMMITS=$(git log ${LAST_TAG:+$LAST_TAG..}HEAD --pretty=format:"%s")
+
+          # Check for breaking changes (major), features (minor), or fixes/perf (patch)
+          if echo "$COMMITS" | grep -qE "^(feat|fix|perf)(\(.+\))?!:"; then
+            NEXT=$(echo $CURRENT | awk -F. '{print $1+1".0.0"}')
+          elif echo "$COMMITS" | grep -qE "^feat(\(.+\))?:"; then
+            NEXT=$(echo $CURRENT | awk -F. '{print $1"."$2+1".0"}')
+          else
+            NEXT=$(echo $CURRENT | awk -F. '{print $1"."$2"."$3+1}')
+          fi
+
+          echo "next=$NEXT" >> $GITHUB_OUTPUT
+          echo "Next version: $NEXT"
+
+      - name: Update version in Cargo.toml
+        run: |
+          sed -i "s/^version = \".*\"/version = \"${{ steps.version.outputs.next }}\"/" Cargo.toml
+
+      - name: Generate changelog
+        run: |
+          git cliff --tag v${{ steps.version.outputs.next }} --output CHANGELOG.md
+
+      - name: Commit and tag
+        run: |
+          git add Cargo.toml CHANGELOG.md
+          git commit -m "chore(release): v${{ steps.version.outputs.next }}"
+          git tag "v${{ steps.version.outputs.next }}"
+          git push
+          git push --tags
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.version.outputs.next }}
+          body_path: CHANGELOG.md
+          draft: false

@@ -21,8 +21,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [0.3.0] and earlier
 
-Initial development of git-daily-rust with:
-- Single repo and workspace update modes
-- Interactive branch cleanup with merge detection
-- Squash-merge detection via `git merge-tree`
-- Three-tier confirmation flow (safe/unclear/unmerged)
+Initial development of git-daily-rust with update and cleanup features.
