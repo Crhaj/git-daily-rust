@@ -19,6 +19,7 @@ use anyhow::Context;
 
 use crate::config::Config;
 use crate::git::{self, GitLogger};
+use crate::output::{BranchListWidths, format_branch_selection_item};
 use crate::prompt::{ConfirmAction, Prompter};
 
 use super::operations::{delete_branches, detect_main_branch, is_detached_head, list_branches};
@@ -106,13 +107,17 @@ pub fn run_interactive(
     // Selection loop - allows user to go back and re-select
     // Note: No side effects (checkout) happen inside the loop to avoid stale state on Back
     let (selected_indices, current_branch_name, has_dangerous) = loop {
-        callbacks.on_branch_list(&branches);
-
-        // Build selection items for prompt
-        let items: Vec<&str> = branches.iter().map(|b| b.name.as_str()).collect();
+        // Build selection items with inline status info (no separate list display)
+        // This provides decision context exactly when users need it
+        let widths = BranchListWidths::from_branches(&branches);
+        let items: Vec<String> = branches
+            .iter()
+            .map(|b| format_branch_selection_item(b, &widths))
+            .collect();
+        let items_refs: Vec<&str> = items.iter().map(String::as_str).collect();
 
         // Get user selection
-        let selected_indices = prompter.multi_select("\nSelect branches to delete", &items)?;
+        let selected_indices = prompter.multi_select("Select branches to delete", &items_refs)?;
 
         if selected_indices.is_empty() {
             callbacks.on_cancelled();

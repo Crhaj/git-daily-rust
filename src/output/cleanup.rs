@@ -77,21 +77,79 @@ impl BranchListWidths {
 #[must_use]
 pub fn format_branch_line(branch: &BranchInfo, widths: &BranchListWidths) -> String {
     let prefix = if branch.is_current { "*" } else { " " };
-    let name = &branch.name;
-    let status = format_branch_status(branch);
+
+    // Pad plain text FIRST, then colorize to ensure correct alignment
+    let status_text = branch_status_text(branch);
+    let status_padded = format!("{:<width$}", status_text, width = widths.status);
+    let status = colorize_branch_status(branch, &status_padded);
+
     let remote = format_tracking_status(&branch.tracking_status);
     let warning = format_branch_warning(branch);
 
     format!(
-        "{} {:<name_width$}  {:<status_width$}  {}{}",
+        "{} {:<name_width$}  {}  {}{}",
         prefix,
-        name,
+        branch.name,
         status,
         remote,
         warning,
         name_width = widths.name,
-        status_width = widths.status,
     )
+}
+
+/// Formats a branch for display in a multi-select prompt.
+///
+/// Creates a compact, colored representation suitable for dialoguer's MultiSelect,
+/// showing status information inline with the branch name so users can make
+/// informed decisions without referring to a separate list.
+///
+/// **Important:** Padding is applied to plain text *before* colorization to ensure
+/// correct column alignment (ANSI codes don't affect visible width calculations).
+///
+/// Format: `branch-name          status    remote: state`
+///
+/// # Example output
+///
+/// - `feature/login          merged    remote: gone`
+/// - `hotfix/v1              unclear   remote: exists  (may be squash-merged)`
+/// - `my-branch              (current) remote: gone`
+#[must_use]
+pub fn format_branch_selection_item(branch: &BranchInfo, widths: &BranchListWidths) -> String {
+    // Pad plain text FIRST, then colorize to ensure correct alignment
+    // (ANSI escape codes would throw off width calculations)
+    let status_text = branch_status_text(branch);
+    let status_padded = format!("{:<width$}", status_text, width = widths.status);
+    let status = colorize_branch_status(branch, &status_padded);
+
+    let remote_text = format!("remote: {}", tracking_status_text(&branch.tracking_status));
+    let remote = colorize_tracking_status(&branch.tracking_status, &remote_text);
+
+    let warning = format_branch_warning_compact(branch);
+
+    format!(
+        "{:<name_width$}  {}  {}{}",
+        branch.name,
+        status,
+        remote,
+        warning,
+        name_width = widths.name,
+    )
+}
+
+/// Compact warning text for selection items.
+fn format_branch_warning_compact(branch: &BranchInfo) -> String {
+    if branch.is_current {
+        return String::new();
+    }
+
+    let status = &branch.merge_status;
+    if status.is_uncertain() {
+        format!("  {}", "(may be squash-merged)".yellow())
+    } else if status.requires_caution() {
+        format!("  {}", "(unmerged)".yellow())
+    } else {
+        String::new()
+    }
 }
 
 /// Prints the header for the branch list.
@@ -163,39 +221,66 @@ pub fn print_deleting_header(config: &Config) {
     eprintln!("\n{}", "Deleting branches...".cyan());
 }
 
-fn format_branch_status(branch: &BranchInfo) -> String {
+/// Returns plain text for branch status (no ANSI colors).
+fn branch_status_text(branch: &BranchInfo) -> &'static str {
     if branch.is_current {
-        "(current branch)".cyan().to_string()
+        "(current branch)"
     } else {
-        format_merge_status(&branch.merge_status)
+        merge_status_text(&branch.merge_status)
     }
 }
 
-/// Formats merge status with semantic color coding.
-///
-/// Uses semantic methods to avoid duplicating variant knowledge.
-fn format_merge_status(status: &MergeStatus) -> String {
-    let label = status.to_string();
+/// Returns plain text for merge status.
+fn merge_status_text(status: &MergeStatus) -> &'static str {
+    match status {
+        MergeStatus::Merged | MergeStatus::SquashMerged => "merged",
+        MergeStatus::Unmerged => "unmerged",
+        MergeStatus::Unclear => "unclear",
+    }
+}
+
+/// Returns plain text for tracking status.
+fn tracking_status_text(status: &TrackingStatus) -> &'static str {
+    match status {
+        TrackingStatus::RemoteExists(_) => "exists",
+        TrackingStatus::RemoteGone => "gone",
+        TrackingStatus::NoUpstream => "local",
+        TrackingStatus::Unknown => "unknown",
+    }
+}
+
+/// Applies semantic color to branch status text.
+fn colorize_branch_status(branch: &BranchInfo, text: &str) -> String {
+    if branch.is_current {
+        text.cyan().to_string()
+    } else {
+        colorize_merge_status(&branch.merge_status, text)
+    }
+}
+
+/// Applies semantic color to merge status text.
+fn colorize_merge_status(status: &MergeStatus, text: &str) -> String {
     if status.is_safely_deletable() {
-        label.green().to_string()
+        text.green().to_string()
     } else if status.requires_caution() {
-        label.yellow().to_string()
+        text.yellow().to_string()
     } else {
-        // Uncertain status (unclear)
-        label.magenta().to_string()
+        text.magenta().to_string()
     }
 }
 
-/// Formats tracking status with semantic color coding.
-///
-/// Active remotes are normal, inactive are dimmed.
-fn format_tracking_status(status: &TrackingStatus) -> String {
-    let label = status.to_string();
+/// Applies semantic color to tracking status text.
+fn colorize_tracking_status(status: &TrackingStatus, text: &str) -> String {
     if status.is_active() {
-        label
+        text.to_string()
     } else {
-        label.dimmed().to_string()
+        text.dimmed().to_string()
     }
+}
+
+/// Formats tracking status with colors (convenience wrapper).
+fn format_tracking_status(status: &TrackingStatus) -> String {
+    colorize_tracking_status(status, tracking_status_text(status))
 }
 
 fn format_branch_warning(branch: &BranchInfo) -> String {
@@ -435,10 +520,6 @@ impl CleanupCallbacks for TerminalCleanupCallbacks {
         print_no_branches_to_clean(&self.config);
     }
 
-    fn on_branch_list(&self, branches: &[BranchInfo]) {
-        print_branch_list(branches, &self.config);
-    }
-
     fn on_current_branch_selected(&self, branch_name: &str) {
         if !self.config.is_quiet() {
             eprintln!(
@@ -507,6 +588,22 @@ mod tests {
         }
     }
 
+    /// Strips ANSI escape codes from a string, returning only visible characters.
+    fn strip_ansi(s: &str) -> String {
+        s.chars()
+            .fold((String::new(), false), |(mut acc, in_escape), c| {
+                if c == '\x1b' {
+                    (acc, true)
+                } else if in_escape {
+                    (acc, c != 'm')
+                } else {
+                    acc.push(c);
+                    (acc, false)
+                }
+            })
+            .0
+    }
+
     #[test]
     fn test_branch_list_widths_from_empty() {
         let widths = BranchListWidths::from_branches(&[]);
@@ -539,23 +636,103 @@ mod tests {
     }
 
     #[test]
-    fn test_format_merge_status_merged_is_green() {
+    fn test_format_branch_line_columns_align_with_colors() {
         colored::control::set_override(true);
-        let result = format_merge_status(&MergeStatus::Merged);
+
+        let branches = vec![
+            make_branch("branch-a", false, MergeStatus::Merged),
+            make_branch("branch-a", true, MergeStatus::Merged),
+            make_branch("branch-a", false, MergeStatus::Unmerged),
+        ];
+        let widths = BranchListWidths::from_branches(&branches);
+
+        let positions: Vec<_> = branches
+            .iter()
+            .map(|b| strip_ansi(&format_branch_line(b, &widths)).find("gone"))
+            .collect();
+
+        assert!(
+            positions.iter().all(|p| *p == positions[0]),
+            "Remote status columns should align: {:?}",
+            positions
+        );
+    }
+
+    #[test]
+    fn test_format_branch_selection_item_includes_status() {
+        let branch = make_branch("feature/test", false, MergeStatus::Merged);
+        let widths = BranchListWidths::from_branches(std::slice::from_ref(&branch));
+        let item = format_branch_selection_item(&branch, &widths);
+        assert!(item.contains("feature/test"));
+        assert!(item.contains("remote:"));
+    }
+
+    #[test]
+    fn test_format_branch_selection_item_current_branch() {
+        let branch = make_branch("my-branch", true, MergeStatus::Merged);
+        let widths = BranchListWidths::from_branches(std::slice::from_ref(&branch));
+        let item = format_branch_selection_item(&branch, &widths);
+        assert!(item.contains("my-branch"));
+        assert!(item.contains("current")); // Shows "(current)" status
+    }
+
+    #[test]
+    fn test_format_branch_selection_item_unclear_shows_warning() {
+        let branch = make_branch("unclear-branch", false, MergeStatus::Unclear);
+        let widths = BranchListWidths::from_branches(std::slice::from_ref(&branch));
+        let item = format_branch_selection_item(&branch, &widths);
+        assert!(item.contains("squash-merged"));
+    }
+
+    #[test]
+    fn test_format_branch_selection_item_unmerged_shows_warning() {
+        let branch = make_branch("unmerged-branch", false, MergeStatus::Unmerged);
+        let widths = BranchListWidths::from_branches(std::slice::from_ref(&branch));
+        let item = format_branch_selection_item(&branch, &widths);
+        assert!(item.contains("(unmerged)"));
+    }
+
+    #[test]
+    fn test_format_branch_selection_item_columns_align_with_colors() {
+        colored::control::set_override(true);
+
+        let branches = vec![
+            make_branch("short", false, MergeStatus::Merged),
+            make_branch("short", true, MergeStatus::Merged),
+            make_branch("short", false, MergeStatus::Unclear),
+        ];
+        let widths = BranchListWidths::from_branches(&branches);
+
+        let positions: Vec<_> = branches
+            .iter()
+            .map(|b| strip_ansi(&format_branch_selection_item(b, &widths)).find("remote:"))
+            .collect();
+
+        assert!(
+            positions.iter().all(|p| *p == positions[0]),
+            "Columns should align: {:?}",
+            positions
+        );
+    }
+
+    #[test]
+    fn test_colorize_merge_status_merged_is_green() {
+        colored::control::set_override(true);
+        let result = colorize_merge_status(&MergeStatus::Merged, "merged");
         assert!(result.contains("\x1b[32m"), "Expected green ANSI code");
     }
 
     #[test]
-    fn test_format_merge_status_unmerged_is_yellow() {
+    fn test_colorize_merge_status_unmerged_is_yellow() {
         colored::control::set_override(true);
-        let result = format_merge_status(&MergeStatus::Unmerged);
+        let result = colorize_merge_status(&MergeStatus::Unmerged, "unmerged");
         assert!(result.contains("\x1b[33m"), "Expected yellow ANSI code");
     }
 
     #[test]
-    fn test_format_merge_status_unclear_is_magenta() {
+    fn test_colorize_merge_status_unclear_is_magenta() {
         colored::control::set_override(true);
-        let result = format_merge_status(&MergeStatus::Unclear);
+        let result = colorize_merge_status(&MergeStatus::Unclear, "unclear");
         assert!(result.contains("\x1b[35m"), "Expected magenta ANSI code");
     }
 

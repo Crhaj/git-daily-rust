@@ -207,9 +207,6 @@ pub trait CleanupCallbacks {
     /// Called when no branches are available to clean.
     fn on_no_branches(&self);
 
-    /// Called to display the branch list before selection.
-    fn on_branch_list(&self, branches: &[BranchInfo]);
-
     /// Called when the user selects their current branch for deletion.
     fn on_current_branch_selected(&self, branch_name: &str);
 
@@ -244,7 +241,6 @@ impl CleanupCallbacks for NoOpCleanupCallbacks {
     fn on_analyzing(&self) {}
     fn on_detached_head(&self) {}
     fn on_no_branches(&self) {}
-    fn on_branch_list(&self, _branches: &[BranchInfo]) {}
     fn on_current_branch_selected(&self, _branch_name: &str) {}
     fn on_switched_branch(&self, _to_branch: &str) {}
     fn on_unclear_warning(&self) {}
