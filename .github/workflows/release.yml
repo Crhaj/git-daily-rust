@@ -14,13 +14,13 @@ jobs:
     if: >-
       startsWith(github.event.head_commit.message, 'feat:') ||
       startsWith(github.event.head_commit.message, 'feat(') ||
-      startsWith(github.event.head_commit.message, 'feat!') ||
+      startsWith(github.event.head_commit.message, 'feat!:') ||
       startsWith(github.event.head_commit.message, 'fix:') ||
       startsWith(github.event.head_commit.message, 'fix(') ||
-      startsWith(github.event.head_commit.message, 'fix!') ||
+      startsWith(github.event.head_commit.message, 'fix!:') ||
       startsWith(github.event.head_commit.message, 'perf:') ||
       startsWith(github.event.head_commit.message, 'perf(') ||
-      startsWith(github.event.head_commit.message, 'perf!')
+      startsWith(github.event.head_commit.message, 'perf!:')
     steps:
       - name: Checkout
         uses: actions/checkout@v4

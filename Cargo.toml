@@ -9,7 +9,7 @@ path = "src/main.rs"
 
 [features]
 default = []
-# Expose test utilities (MockPrompter) for integration tests
+# Expose MockPrompter in release builds (debug builds have it automatically)
 test-utils = []
 
 [dependencies]

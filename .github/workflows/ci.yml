@@ -27,7 +27,7 @@ jobs:
         run: cargo clippy -- -D warnings
 
       - name: Test
-        run: cargo test --features test-utils
+        run: cargo test
 
   coverage:
     runs-on: ubuntu-latest
@@ -45,7 +45,7 @@ jobs:
         uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Generate coverage
-        run: cargo llvm-cov --workspace --features test-utils --lcov --output-path lcov.info
+        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4

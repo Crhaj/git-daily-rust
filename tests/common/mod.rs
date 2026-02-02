@@ -271,5 +271,5 @@ pub fn setup_workspace_with_repos(
     Ok(())
 }
 
-// MockPrompter is provided by the library via the `test-utils` feature.
-// Run tests with: cargo test --features test-utils
+// MockPrompter is provided by the library (available in debug builds).
+// Import with: use git_daily_rust::prompt::MockPrompter;

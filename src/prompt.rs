@@ -125,10 +125,10 @@ impl Prompter for TerminalPrompter {
     }
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, debug_assertions, feature = "test-utils"))]
 pub use mock::MockPrompter;
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, debug_assertions, feature = "test-utils"))]
 mod mock {
     use std::collections::VecDeque;
     use std::sync::Mutex;
