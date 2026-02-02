@@ -3,14 +3,18 @@
 //! Provides test fixtures and utilities for creating temporary git repositories.
 #![allow(dead_code)]
 
+use std::collections::VecDeque;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+
 use anyhow::Result;
+use tempfile::TempDir;
+
 use git_daily_rust::config::Config;
 use git_daily_rust::git::run_git;
+use git_daily_rust::prompt::{ConfirmAction, Prompter};
 use git_daily_rust::repo::{UpdateCallbacks, UpdateResult, UpdateStep};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use tempfile::TempDir;
 
 /// Default config for tests (normal verbosity, no special options).
 pub fn test_config() -> Config {
@@ -267,4 +271,99 @@ pub fn setup_workspace_with_repos(
         run_git(&repo_path, &config, &["push", "-u", "origin", branch])?;
     }
     Ok(())
+}
+
+/// Mock prompter for testing interactive flows.
+///
+/// Responses are consumed in FIFO order. Panics if a method is called
+/// with no responses queued.
+pub struct MockPrompter {
+    multi_select_responses: Mutex<VecDeque<Result<Vec<usize>>>>,
+    select_responses: Mutex<VecDeque<Result<usize>>>,
+    confirm_responses: Mutex<VecDeque<Result<bool>>>,
+    type_confirm_responses: Mutex<VecDeque<Result<bool>>>,
+    confirm_with_back_responses: Mutex<VecDeque<Result<ConfirmAction>>>,
+}
+
+impl MockPrompter {
+    pub fn new() -> Self {
+        Self {
+            multi_select_responses: Mutex::new(VecDeque::new()),
+            select_responses: Mutex::new(VecDeque::new()),
+            confirm_responses: Mutex::new(VecDeque::new()),
+            type_confirm_responses: Mutex::new(VecDeque::new()),
+            confirm_with_back_responses: Mutex::new(VecDeque::new()),
+        }
+    }
+
+    pub fn with_multi_select(self, indices: Vec<usize>) -> Self {
+        self.multi_select_responses
+            .lock()
+            .unwrap()
+            .push_back(Ok(indices));
+        self
+    }
+
+    pub fn with_confirm(self, value: bool) -> Self {
+        self.confirm_responses.lock().unwrap().push_back(Ok(value));
+        self
+    }
+
+    pub fn with_type_confirm(self, value: bool) -> Self {
+        self.type_confirm_responses
+            .lock()
+            .unwrap()
+            .push_back(Ok(value));
+        self
+    }
+
+    pub fn with_confirm_back(self, action: ConfirmAction) -> Self {
+        self.confirm_with_back_responses
+            .lock()
+            .unwrap()
+            .push_back(Ok(action));
+        self
+    }
+}
+
+impl Prompter for MockPrompter {
+    fn multi_select(&self, _prompt: &str, _items: &[&str]) -> Result<Vec<usize>> {
+        self.multi_select_responses
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("MockPrompter: no multi_select response queued")
+    }
+
+    fn select(&self, _prompt: &str, _items: &[&str]) -> Result<usize> {
+        self.select_responses
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("MockPrompter: no select response queued")
+    }
+
+    fn confirm(&self, _prompt: &str, _default: bool) -> Result<bool> {
+        self.confirm_responses
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("MockPrompter: no confirm response queued")
+    }
+
+    fn type_to_confirm(&self, _prompt: &str, _expected: &str) -> Result<bool> {
+        self.type_confirm_responses
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("MockPrompter: no type_confirm response queued")
+    }
+
+    fn confirm_with_back(&self, _prompt: &str) -> Result<ConfirmAction> {
+        self.confirm_with_back_responses
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("MockPrompter: no confirm_with_back response queued")
+    }
 }

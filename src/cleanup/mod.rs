@@ -23,7 +23,7 @@ mod types;
 // Re-export types for public API
 pub use types::{
     BranchInfo, CleanupCallbacks, CleanupResult, DeletionMode, DeletionOutcome, DeletionResult,
-    InteractiveResult, MergeStatus, TrackingStatus,
+    InteractiveResult, MergeStatus, NoOpCleanupCallbacks, TrackingStatus,
 };
 
 // Re-export operations for public API

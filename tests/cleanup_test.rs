@@ -4,12 +4,14 @@
 
 mod common;
 
-use common::{TestRepo, test_config};
+use common::{MockPrompter, TestRepo, test_config};
 use git_daily_rust::cleanup::{
-    self, BranchInfo, DeletionMode, DeletionOutcome, MergeStatus, TrackingStatus,
+    self, BranchInfo, DeletionMode, DeletionOutcome, MergeStatus, NoOpCleanupCallbacks,
+    TrackingStatus,
 };
 use git_daily_rust::config::Config;
 use git_daily_rust::git::{self, GitLogger};
+use git_daily_rust::prompt::ConfirmAction;
 
 /// Shorthand for the test logger (no-op for tests).
 fn logger() -> GitLogger {
@@ -540,6 +542,175 @@ fn test_unclear_status_branches_detected() -> anyhow::Result<()> {
         feature.merge_status.is_uncertain(),
         "Branch with conflicting changes should be unclear, got {:?}",
         feature.merge_status
+    );
+    Ok(())
+}
+
+// =============================================================================
+// run_interactive tests
+// =============================================================================
+
+#[test]
+fn test_run_interactive_deletes_selected_merged_branch() -> anyhow::Result<()> {
+    let repo = TestRepo::new()?;
+    let config = test_config();
+
+    // Create and merge a feature branch
+    repo.checkout_new_branch("feature/to-delete")?;
+    repo.add_commit("feature work")?;
+    repo.checkout("master")?;
+    repo.merge("feature/to-delete")?;
+
+    // Mock: select index 0, confirm with Yes
+    let prompter = MockPrompter::new()
+        .with_multi_select(vec![0])
+        .with_confirm_back(ConfirmAction::Yes);
+
+    let callbacks = NoOpCleanupCallbacks;
+
+    let result = cleanup::run_interactive(
+        repo.path(),
+        false, // not dry run
+        &prompter,
+        &callbacks,
+        &config,
+        logger(),
+    )?;
+
+    let result = result.expect("should return Some result");
+    assert!(!result.dry_run);
+    assert_eq!(result.result.deletions.len(), 1);
+    assert!(matches!(
+        result.result.deletions[0].outcome,
+        DeletionOutcome::Deleted
+    ));
+    assert!(!repo.branch_exists("feature/to-delete"));
+    Ok(())
+}
+
+#[test]
+fn test_run_interactive_cancels_on_empty_selection() -> anyhow::Result<()> {
+    let repo = TestRepo::new()?;
+    let config = test_config();
+
+    // Create a branch to have something to select
+    repo.checkout_new_branch("feature/test")?;
+    repo.add_commit("work")?;
+    repo.checkout("master")?;
+    repo.merge("feature/test")?;
+
+    // Mock: empty selection (user pressed Enter without selecting)
+    let prompter = MockPrompter::new().with_multi_select(vec![]);
+
+    let callbacks = NoOpCleanupCallbacks;
+
+    let result =
+        cleanup::run_interactive(repo.path(), false, &prompter, &callbacks, &config, logger())?;
+
+    assert!(result.is_none(), "Empty selection should cancel");
+    assert!(repo.branch_exists("feature/test"), "Branch should remain");
+    Ok(())
+}
+
+#[test]
+fn test_run_interactive_cancels_on_no_confirmation() -> anyhow::Result<()> {
+    let repo = TestRepo::new()?;
+    let config = test_config();
+
+    // Create a branch
+    repo.checkout_new_branch("feature/test")?;
+    repo.add_commit("work")?;
+    repo.checkout("master")?;
+    repo.merge("feature/test")?;
+
+    // Mock: select branch, then say No
+    let prompter = MockPrompter::new()
+        .with_multi_select(vec![0])
+        .with_confirm_back(ConfirmAction::No);
+
+    let callbacks = NoOpCleanupCallbacks;
+
+    let result =
+        cleanup::run_interactive(repo.path(), false, &prompter, &callbacks, &config, logger())?;
+
+    assert!(result.is_none(), "No confirmation should cancel");
+    assert!(repo.branch_exists("feature/test"), "Branch should remain");
+    Ok(())
+}
+
+#[test]
+fn test_run_interactive_back_allows_reselection() -> anyhow::Result<()> {
+    let repo = TestRepo::new()?;
+    let config = test_config();
+
+    // Create two branches
+    repo.checkout_new_branch("feature/first")?;
+    repo.add_commit("first")?;
+    repo.checkout("master")?;
+    repo.merge("feature/first")?;
+
+    repo.checkout_new_branch("feature/second")?;
+    repo.add_commit("second")?;
+    repo.checkout("master")?;
+    repo.merge("feature/second")?;
+
+    // Mock: select first, go back, select second, confirm
+    let prompter = MockPrompter::new()
+        .with_multi_select(vec![0]) // first selection: feature/first
+        .with_confirm_back(ConfirmAction::Back) // go back
+        .with_multi_select(vec![1]) // second selection: feature/second
+        .with_confirm_back(ConfirmAction::Yes); // confirm
+
+    let callbacks = NoOpCleanupCallbacks;
+
+    let result =
+        cleanup::run_interactive(repo.path(), false, &prompter, &callbacks, &config, logger())?;
+
+    let result = result.expect("should complete");
+    assert_eq!(result.result.deletions.len(), 1);
+    // First branch should remain (we went back and selected second instead)
+    assert!(repo.branch_exists("feature/first"));
+    assert!(!repo.branch_exists("feature/second"));
+    Ok(())
+}
+
+#[test]
+fn test_run_interactive_dry_run_does_not_delete() -> anyhow::Result<()> {
+    let repo = TestRepo::new()?;
+    let config = test_config();
+
+    // Create a branch
+    repo.checkout_new_branch("feature/test")?;
+    repo.add_commit("work")?;
+    repo.checkout("master")?;
+    repo.merge("feature/test")?;
+
+    // Mock: select branch, confirm
+    let prompter = MockPrompter::new()
+        .with_multi_select(vec![0])
+        .with_confirm_back(ConfirmAction::Yes);
+
+    let callbacks = NoOpCleanupCallbacks;
+
+    let result = cleanup::run_interactive(
+        repo.path(),
+        true, // dry run
+        &prompter,
+        &callbacks,
+        &config,
+        logger(),
+    )?;
+
+    let result = result.expect("should complete");
+    assert!(result.dry_run);
+    assert!(
+        result.result.deletions.is_empty(),
+        "No actual deletions in dry run"
+    );
+    assert_eq!(result.dry_run_branches, vec!["feature/test"]);
+    assert!(
+        repo.branch_exists("feature/test"),
+        "Branch should remain in dry run"
     );
     Ok(())
 }

@@ -229,6 +229,27 @@ pub trait CleanupCallbacks {
     fn on_dry_run(&self, branches: &[&BranchInfo]);
 }
 
+/// No-op callbacks for when progress tracking is not needed.
+///
+/// This is the null object pattern for `CleanupCallbacks` - use it in tests
+/// or when you don't need any output.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NoOpCleanupCallbacks;
+
+impl CleanupCallbacks for NoOpCleanupCallbacks {
+    fn on_analyzing(&self) {}
+    fn on_detached_head(&self) {}
+    fn on_no_branches(&self) {}
+    fn on_branch_list(&self, _branches: &[BranchInfo]) {}
+    fn on_current_branch_selected(&self, _branch_name: &str) {}
+    fn on_switched_branch(&self, _to_branch: &str) {}
+    fn on_unclear_warning(&self) {}
+    fn on_deleting(&self) {}
+    fn on_deletion_result(&self, _result: &DeletionResult) {}
+    fn on_cancelled(&self) {}
+    fn on_dry_run(&self, _branches: &[&BranchInfo]) {}
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

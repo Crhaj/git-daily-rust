@@ -74,6 +74,8 @@ pub(crate) fn check_merge_status(
 /// Returns an empty set if the git command fails. This is intentional:
 /// branches not found in this set will fall through to squash-merge detection,
 /// which provides a more accurate (though slower) check.
+///
+/// In verbose mode, logs a warning when falling back to slower detection.
 fn get_merged_branches(
     repo: &Path,
     main_branch: &str,
@@ -81,6 +83,11 @@ fn get_merged_branches(
     logger: GitLogger,
 ) -> HashSet<String> {
     let Ok(output) = git::list_merged_branches(repo, config, main_branch, logger) else {
+        if config.is_verbose() {
+            eprintln!(
+                "Warning: Could not get merged branches, falling back to squash-merge detection"
+            );
+        }
         return HashSet::new();
     };
 
