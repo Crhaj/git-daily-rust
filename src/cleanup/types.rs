@@ -20,36 +20,39 @@ pub struct BranchInfo {
 
 /// The merge status of a branch relative to the main branch.
 ///
-/// # Squash-Merge Detection
+/// Detected using a two-step approach:
+/// 1. `git diff --diff-filter=D` to check for files unique to the branch
+/// 2. `git diff --numstat` to check for line-level content unique to the branch
 ///
-/// Git's `branch --merged` only detects traditional merges. Squash merges
-/// rewrite commits, so the branch appears unmerged even though its changes
-/// are in main. We detect these using `git merge-tree`, which simulates
-/// a merge - if it produces no diff, the changes are already present.
+/// A branch is considered merged if all its content (files and lines) exists in main,
+/// even if main has moved ahead with additional commits.
 ///
 /// # Safety Levels
 ///
-/// - **Safe** (`Merged`, `SquashMerged`): No data loss risk
-/// - **Uncertain** (`Unclear`): Conflicts prevent verification; may be squash-merged
-/// - **Dangerous** (`Unmerged`): Definitely has unique, potentially unrecoverable work
+/// - **Safe** (`Merged`): No data loss risk - all branch content is in main
+/// - **Uncertain** (`Unclear`): Could not verify status
+/// - **Dangerous** (`Unmerged`): Has unique content not in main
+///
+/// # Limitations
+///
+/// - Mode-only changes (e.g., chmod +x) without content changes are not detected
+/// - Renames are shown as delete+add, which conservatively triggers "unmerged"
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use]
 pub enum MergeStatus {
-    /// Fully merged into master/main via regular merge.
+    /// All branch content is in main (regular merge, squash merge, or cherry-pick).
     Merged,
-    /// Changes present in master/main (squash merge detected via merge-tree).
-    SquashMerged,
-    /// Definitely has unique changes not in master/main.
+    /// Has unique content not in master/main.
     Unmerged,
-    /// Cannot determine - merge-tree showed conflicts, may be squash-merged.
+    /// Cannot determine status.
     Unclear,
 }
 
 impl MergeStatus {
-    /// Returns true if the branch is safe to delete without force.
+    /// Returns true if the branch is safe to delete (changes are in main).
     #[must_use]
     pub fn is_safely_deletable(&self) -> bool {
-        matches!(self, Self::Merged | Self::SquashMerged)
+        matches!(self, Self::Merged)
     }
 
     /// Returns true if this status requires user caution (potential data loss).
@@ -58,7 +61,7 @@ impl MergeStatus {
         matches!(self, Self::Unmerged)
     }
 
-    /// Returns true if the merge status is uncertain and needs verification.
+    /// Returns true if the merge status is uncertain.
     #[must_use]
     pub fn is_uncertain(&self) -> bool {
         matches!(self, Self::Unclear)
@@ -67,10 +70,8 @@ impl MergeStatus {
 
 impl std::fmt::Display for MergeStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Both Merged and SquashMerged display as "merged" since the
-        // distinction is typically not relevant to end users.
         let label = match self {
-            Self::Merged | Self::SquashMerged => "merged",
+            Self::Merged => "merged",
             Self::Unmerged => "unmerged",
             Self::Unclear => "unclear",
         };
@@ -257,7 +258,6 @@ mod tests {
     #[test]
     fn test_merge_status_display_trait() {
         assert_eq!(MergeStatus::Merged.to_string(), "merged");
-        assert_eq!(MergeStatus::SquashMerged.to_string(), "merged");
         assert_eq!(MergeStatus::Unmerged.to_string(), "unmerged");
         assert_eq!(MergeStatus::Unclear.to_string(), "unclear");
     }
@@ -265,7 +265,6 @@ mod tests {
     #[test]
     fn test_merge_status_is_safely_deletable() {
         assert!(MergeStatus::Merged.is_safely_deletable());
-        assert!(MergeStatus::SquashMerged.is_safely_deletable());
         assert!(!MergeStatus::Unmerged.is_safely_deletable());
         assert!(!MergeStatus::Unclear.is_safely_deletable());
     }
@@ -273,7 +272,6 @@ mod tests {
     #[test]
     fn test_merge_status_requires_caution() {
         assert!(!MergeStatus::Merged.requires_caution());
-        assert!(!MergeStatus::SquashMerged.requires_caution());
         assert!(MergeStatus::Unmerged.requires_caution());
         assert!(!MergeStatus::Unclear.requires_caution());
     }
@@ -281,7 +279,6 @@ mod tests {
     #[test]
     fn test_merge_status_is_uncertain() {
         assert!(!MergeStatus::Merged.is_uncertain());
-        assert!(!MergeStatus::SquashMerged.is_uncertain());
         assert!(!MergeStatus::Unmerged.is_uncertain());
         assert!(MergeStatus::Unclear.is_uncertain());
     }

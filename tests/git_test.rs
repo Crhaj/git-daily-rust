@@ -135,7 +135,7 @@ fn test_delete_branch_removes_branch() -> anyhow::Result<()> {
 }
 
 #[test]
-fn test_merge_base_and_merge_tree() -> anyhow::Result<()> {
+fn test_merge_base_and_diff_branch_trees() -> anyhow::Result<()> {
     let config = test_config();
     let repo = TestRepo::new()?;
     let base_commit = git::get_current_commit(repo.path(), &config, logger())?;
@@ -148,14 +148,8 @@ fn test_merge_base_and_merge_tree() -> anyhow::Result<()> {
     let merge_base = git::merge_base(repo.path(), &config, "master", "feature", logger())?;
     assert_eq!(merge_base, base_commit);
 
-    let output = git::merge_tree(
-        repo.path(),
-        &config,
-        &merge_base,
-        "master",
-        "feature",
-        logger(),
-    )?;
+    // Unmerged branch should have non-empty numstat diff
+    let output = git::diff_numstat(repo.path(), &config, "feature", "master", logger())?;
     assert!(!output.trim().is_empty());
     Ok(())
 }
@@ -265,20 +259,11 @@ fn test_remote_ref_exists_rejects_invalid_remote_ref() -> anyhow::Result<()> {
 }
 
 #[test]
-fn test_merge_tree_errors_on_missing_ref() -> anyhow::Result<()> {
+fn test_diff_numstat_errors_on_missing_ref() -> anyhow::Result<()> {
     let config = test_config();
     let repo = TestRepo::new()?;
-    let base =
-        git::get_current_commit(repo.path(), &config, logger()).expect("failed to get base commit");
 
-    let result = git::merge_tree(
-        repo.path(),
-        &config,
-        &base,
-        "master",
-        "does-not-exist",
-        logger(),
-    );
+    let result = git::diff_numstat(repo.path(), &config, "master", "does-not-exist", logger());
     assert!(result.is_err());
     Ok(())
 }
@@ -335,13 +320,11 @@ fn test_merge_base_errors_on_missing_ref() -> anyhow::Result<()> {
 }
 
 #[test]
-fn test_merge_tree_rejects_invalid_branch_name() -> anyhow::Result<()> {
+fn test_diff_numstat_rejects_invalid_branch_name() -> anyhow::Result<()> {
     let config = test_config();
     let repo = TestRepo::new()?;
-    let base =
-        git::get_current_commit(repo.path(), &config, logger()).expect("failed to get base commit");
 
-    let result = git::merge_tree(repo.path(), &config, &base, "master", "bad;name", logger());
+    let result = git::diff_numstat(repo.path(), &config, "master", "bad;name", logger());
     assert!(result.is_err());
     Ok(())
 }

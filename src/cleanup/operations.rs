@@ -18,12 +18,6 @@ use super::types::{
     BranchInfo, DeletionMode, DeletionOutcome, DeletionResult, MergeStatus, TrackingStatus,
 };
 
-// Git conflict markers (7 characters each)
-const CONFLICT_START: &str = "<<<<<<<";
-const CONFLICT_MIDDLE: &str = "=======";
-const CONFLICT_END: &str = ">>>>>>>";
-const CONFLICT_PREFIX: &str = "CONFLICT";
-
 /// Detects the main branch (master or main) for the repository.
 ///
 /// Tries master first, falls back to main. Returns an error if neither exists.
@@ -45,13 +39,13 @@ pub fn detect_main_branch(
 
 /// Determines if a branch is merged into main.
 ///
-/// Uses a two-phase approach:
-/// 1. Traditional merge check via `git branch --merged` (fast)
-/// 2. Squash-merge detection via `git merge-tree` (catches squash merges)
+/// Uses `git diff main branch` (tree comparison) to check if the branches have
+/// identical content. If the diff is empty, the branch is considered merged
+/// (works for regular merges, squash merges, and cherry-picks).
 ///
 /// Note: This function calls git for each invocation. For checking multiple
-/// branches, use [`list_branches`] which pre-computes the merged set for O(1)
-/// lookups instead of O(N) git calls.
+/// branches, use [`list_branches`] which pre-computes the traditionally-merged
+/// set for O(1) lookups, only calling diff for branches not in that set.
 #[allow(dead_code)]
 pub(crate) fn check_merge_status(
     repo: &Path,
@@ -60,19 +54,13 @@ pub(crate) fn check_merge_status(
     config: &Config,
     logger: GitLogger,
 ) -> MergeStatus {
-    // Phase 1: Traditional merge check (fast)
-    if is_traditionally_merged(repo, branch, main_branch, config, logger) {
-        return MergeStatus::Merged;
-    }
-
-    // Phase 2: Squash-merge check using merge-tree
-    check_squash_merge_status(repo, branch, main_branch, config, logger)
+    check_merge_status_via_diff(repo, branch, main_branch, config, logger)
 }
 
 /// Fetches the set of branches merged into the main branch.
 ///
 /// Returns an empty set if the git command fails. This is intentional:
-/// branches not found in this set will fall through to squash-merge detection,
+/// branches not found in this set will fall through to diff-based detection,
 /// which provides a more accurate (though slower) check.
 ///
 /// In verbose mode, logs a warning when falling back to slower detection.
@@ -85,7 +73,7 @@ fn get_merged_branches(
     let Ok(output) = git::list_merged_branches(repo, config, main_branch, logger) else {
         if config.is_verbose() {
             eprintln!(
-                "Warning: Could not get merged branches, falling back to squash-merge detection"
+                "Warning: Could not get merged branches, falling back to diff-based detection"
             );
         }
         return HashSet::new();
@@ -97,49 +85,70 @@ fn get_merged_branches(
         .collect()
 }
 
-/// Checks if a branch is merged using traditional `git branch --merged`.
+/// Checks if a branch is merged by verifying its content is fully contained in main.
 ///
-/// Note: For batch operations, prefer using `get_merged_branches` once and
-/// checking membership to avoid repeated git calls.
-#[allow(dead_code)]
-fn is_traditionally_merged(
-    repo: &Path,
-    branch: &str,
-    main_branch: &str,
-    config: &Config,
-    logger: GitLogger,
-) -> bool {
-    let merged = get_merged_branches(repo, main_branch, config, logger);
-    merged.contains(branch)
-}
-
-/// Checks for squash-merge using merge-tree simulation.
-fn check_squash_merge_status(
+/// Uses a two-step approach:
+/// 1. Check for deleted files (files unique to branch, including empty files)
+/// 2. Check numstat for line-level content unique to branch
+///
+/// This correctly handles:
+/// - Regular merges (branch is ancestor of main)
+/// - Squash merges (content identical, history differs)
+/// - Cherry-picks (commits applied to main)
+/// - Main ahead after merge (main has additional commits)
+/// - Empty files unique to branch
+fn check_merge_status_via_diff(
     repo: &Path,
     branch: &str,
     main_branch: &str,
     config: &Config,
     logger: GitLogger,
 ) -> MergeStatus {
-    let base = match git::merge_base(repo, config, main_branch, branch, logger) {
-        Ok(b) => b.trim().to_string(),
+    // Step 1: Check for files that exist in branch but not in main.
+    // This catches empty files and other edge cases that numstat misses.
+    match git::has_deleted_files(repo, config, branch, main_branch, logger) {
+        Ok(true) => return MergeStatus::Unmerged,
+        Ok(false) => {}
         Err(_) => return MergeStatus::Unclear,
-    };
+    }
 
-    match git::merge_tree(repo, config, &base, main_branch, branch, logger) {
-        Ok(output) if output.trim().is_empty() => MergeStatus::SquashMerged,
-        Ok(output) if contains_conflict_markers(&output) => MergeStatus::Unclear,
-        Ok(_) => MergeStatus::Unmerged,
+    // Step 2: Check for line-level content unique to branch.
+    // Format: <added>\t<removed>\t<filename>
+    match git::diff_numstat(repo, config, branch, main_branch, logger) {
+        Ok(output) if output.trim().is_empty() => {
+            // Empty diff = identical trees = definitely merged
+            MergeStatus::Merged
+        }
+        Ok(output) => {
+            let has_unique_content = output.lines().any(has_removals_in_numstat_line);
+            if has_unique_content {
+                MergeStatus::Unmerged
+            } else {
+                MergeStatus::Merged
+            }
+        }
         Err(_) => MergeStatus::Unclear,
     }
 }
 
-/// Checks if merge-tree output contains conflict markers.
-fn contains_conflict_markers(output: &str) -> bool {
-    output.contains(CONFLICT_START)
-        || output.contains(CONFLICT_MIDDLE)
-        || output.contains(CONFLICT_END)
-        || output.lines().any(|line| line.starts_with(CONFLICT_PREFIX))
+/// Checks if a numstat line indicates content unique to the source branch.
+///
+/// Format: `<added>\t<removed>\t<filename>`
+/// - Binary files show `-` for both columns
+/// - Returns true if the line shows removals (content in source not in target)
+fn has_removals_in_numstat_line(line: &str) -> bool {
+    let mut parts = line.split('\t');
+    let added = parts.next();
+    let removed = parts.next();
+
+    match (added, removed) {
+        // Binary file: both columns show "-", indicating a binary difference
+        (Some("-"), Some("-")) => true,
+        // Text file: check if removed count > 0
+        (Some(_), Some(r)) => r.parse::<u32>().map_or(true, |n| n > 0),
+        // Malformed output: be conservative
+        _ => true,
+    }
 }
 
 /// Determines the tracking status for a branch given its upstream ref.
@@ -172,7 +181,7 @@ pub fn check_tracking_status(
 /// # Performance
 ///
 /// - O(1) lookup for traditional merges (pre-computed `git branch --merged`)
-/// - O(U * 2) git calls for unmerged branches (merge-base + merge-tree each)
+/// - O(U) git calls for unmerged branches (diff each)
 /// - O(N) git calls for remote tracking status (one per branch)
 ///
 /// For repositories with hundreds of branches, consider batch-fetching
@@ -243,13 +252,13 @@ fn check_merge_status_with_cache(
     merged_branches: &HashSet<String>,
     logger: GitLogger,
 ) -> MergeStatus {
-    // Phase 1: Check pre-computed merged set (O(1) lookup)
+    // Fast path: check pre-computed merged set (O(1) lookup)
     if merged_branches.contains(branch) {
         return MergeStatus::Merged;
     }
 
-    // Phase 2: Squash-merge check using merge-tree
-    check_squash_merge_status(repo, branch, main_branch, config, logger)
+    // Slow path: diff-based check for branches not in merged set
+    check_merge_status_via_diff(repo, branch, main_branch, config, logger)
 }
 
 /// Detects main branch from already-fetched branch list output.
@@ -418,29 +427,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_contains_conflict_markers_detects_standard_markers() {
-        assert!(contains_conflict_markers(&format!(
-            "{} HEAD",
-            CONFLICT_START
-        )));
-        assert!(contains_conflict_markers(CONFLICT_MIDDLE));
-        assert!(contains_conflict_markers(&format!(
-            "{} branch",
-            CONFLICT_END
-        )));
-        assert!(contains_conflict_markers(
-            "CONFLICT (content): Merge conflict in file.txt"
-        ));
-    }
-
-    #[test]
-    fn test_contains_conflict_markers_rejects_non_markers() {
-        assert!(!contains_conflict_markers("normal content"));
-        assert!(!contains_conflict_markers("======")); // Only 6 equals, need 7
-        assert!(!contains_conflict_markers("some === code"));
-    }
 
     #[test]
     fn test_parse_branch_line_with_upstream() {

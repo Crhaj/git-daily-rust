@@ -302,29 +302,71 @@ pub fn merge_base(
         .with_context(|| format!("Failed to run merge-base for '{}' and '{}'", ref1, ref2))
 }
 
-/// Returns the merge-tree output for the two refs and a common base.
-pub fn merge_tree(
+/// Returns numstat diff output showing line changes between two branches.
+///
+/// Uses `git diff --numstat from_branch to_branch` which outputs:
+/// `<added>\t<removed>\t<filename>` for each changed file.
+///
+/// This is used to determine if a branch's content is fully contained in another:
+/// - If diffing FROM feature TO main shows only additions (removed=0), feature is merged
+/// - If there are any removals, feature has content not in main
+///
+/// Binary files show `-` instead of numbers.
+///
+/// Note: Empty files that exist in from_branch but not to_branch show as `0\t0\tfilename`.
+/// Use [`has_deleted_files`] to catch this edge case.
+pub fn diff_numstat(
     repo: &Path,
     config: &Config,
-    base: &str,
-    branch1: &str,
-    branch2: &str,
+    from_branch: &str,
+    to_branch: &str,
     logger: GitLogger,
 ) -> anyhow::Result<String> {
-    validate_branch_name(branch1)?;
-    validate_branch_name(branch2)?;
+    validate_branch_name(from_branch)?;
+    validate_branch_name(to_branch)?;
     run_git_with_logger(
         repo,
         config,
-        &["merge-tree", base, branch1, branch2],
+        &["diff", "--numstat", from_branch, to_branch],
+        logger,
+    )
+    .with_context(|| format!("Failed to diff --numstat {} {}", from_branch, to_branch))
+}
+
+/// Checks if there are files that exist in from_branch but not in to_branch.
+///
+/// Uses `git diff --diff-filter=D --name-only from_branch to_branch` which lists
+/// files that would be deleted when going from `from_branch` to `to_branch`.
+///
+/// This catches edge cases that numstat misses, such as empty files unique to the branch.
+pub fn has_deleted_files(
+    repo: &Path,
+    config: &Config,
+    from_branch: &str,
+    to_branch: &str,
+    logger: GitLogger,
+) -> anyhow::Result<bool> {
+    validate_branch_name(from_branch)?;
+    validate_branch_name(to_branch)?;
+    let output = run_git_with_logger(
+        repo,
+        config,
+        &[
+            "diff",
+            "--diff-filter=D",
+            "--name-only",
+            from_branch,
+            to_branch,
+        ],
         logger,
     )
     .with_context(|| {
         format!(
-            "Failed to run merge-tree on base: '{}' for branch '{}' and '{}'",
-            base, branch1, branch2
+            "Failed to check deleted files {} {}",
+            from_branch, to_branch
         )
-    })
+    })?;
+    Ok(!output.trim().is_empty())
 }
 
 /// Executes a git command and returns the raw output without interpreting exit status.

@@ -70,10 +70,10 @@ fn test_squash_merge_detected_as_merged() -> anyhow::Result<()> {
 
     assert!(
         feature.merge_status.is_safely_deletable(),
-        "Squash-merged branch should be safely deletable, got {:?}",
+        "Merged branch should be safely deletable, got {:?}",
         feature.merge_status
     );
-    assert_eq!(feature.merge_status, MergeStatus::SquashMerged);
+    assert_eq!(feature.merge_status, MergeStatus::Merged);
     Ok(())
 }
 
@@ -95,6 +95,156 @@ fn test_unmerged_branch_detected_as_unmerged() -> anyhow::Result<()> {
     assert!(
         feature.merge_status.requires_caution(),
         "Unmerged branch should require caution, got {:?}",
+        feature.merge_status
+    );
+    assert_eq!(feature.merge_status, MergeStatus::Unmerged);
+    Ok(())
+}
+
+#[test]
+fn test_cherry_picked_branch_detected_as_merged() -> anyhow::Result<()> {
+    let repo = TestRepo::new()?;
+    let config = test_config();
+
+    // Create a feature branch with a commit
+    repo.checkout_new_branch("feature/cherry")?;
+    repo.add_commit("cherry work")?;
+    let commit_hash = repo.get_head_commit()?;
+
+    // Cherry-pick to master
+    repo.checkout("master")?;
+    repo.cherry_pick(&commit_hash)?;
+
+    // List branches - feature/cherry should be detected as merged
+    // because the file contents are identical (cherry-pick copies content)
+    let branches = list_branches(&repo, &config)?;
+    let feature = find_branch(&branches, "feature/cherry").expect("cherry branch should be listed");
+
+    assert!(
+        feature.merge_status.is_safely_deletable(),
+        "Cherry-picked branch should be safely deletable, got {:?}",
+        feature.merge_status
+    );
+    assert_eq!(feature.merge_status, MergeStatus::Merged);
+    Ok(())
+}
+
+#[test]
+fn test_partial_cherry_pick_detected_as_unmerged() -> anyhow::Result<()> {
+    let repo = TestRepo::new()?;
+    let config = test_config();
+
+    // Create a feature branch with two commits
+    repo.checkout_new_branch("feature/partial")?;
+    repo.add_commit("first commit")?;
+    let first_commit = repo.get_head_commit()?;
+    repo.add_commit("second commit")?;
+
+    // Only cherry-pick the first commit to master
+    repo.checkout("master")?;
+    repo.cherry_pick(&first_commit)?;
+
+    // List branches - feature/partial should be unmerged because
+    // the second commit's changes are not in master
+    let branches = list_branches(&repo, &config)?;
+    let feature =
+        find_branch(&branches, "feature/partial").expect("partial branch should be listed");
+
+    assert!(
+        feature.merge_status.requires_caution(),
+        "Partially cherry-picked branch should require caution, got {:?}",
+        feature.merge_status
+    );
+    assert_eq!(feature.merge_status, MergeStatus::Unmerged);
+    Ok(())
+}
+
+#[test]
+fn test_empty_file_unique_to_branch_detected_as_unmerged() -> anyhow::Result<()> {
+    let repo = TestRepo::new()?;
+    let config = test_config();
+
+    // Create a branch with an empty file (e.g., .gitkeep, config placeholder)
+    repo.checkout_new_branch("feature/empty-file")?;
+    std::fs::File::create(repo.path().join("empty.txt"))?;
+    git::run_git(repo.path(), &config, &["add", "empty.txt"])?;
+    git::run_git(repo.path(), &config, &["commit", "-m", "Add empty file"])?;
+    repo.checkout("master")?;
+
+    // The branch has a file that master doesn't - should be unmerged
+    let branches = list_branches(&repo, &config)?;
+    let feature =
+        find_branch(&branches, "feature/empty-file").expect("empty-file branch should be listed");
+
+    assert!(
+        feature.merge_status.requires_caution(),
+        "Branch with empty file unique to it should be unmerged, got {:?}",
+        feature.merge_status
+    );
+    assert_eq!(feature.merge_status, MergeStatus::Unmerged);
+    Ok(())
+}
+
+#[test]
+fn test_binary_file_unique_to_branch_detected_as_unmerged() -> anyhow::Result<()> {
+    let repo = TestRepo::new()?;
+    let config = test_config();
+
+    // Create a branch with a binary file (PNG header bytes)
+    repo.checkout_new_branch("feature/binary")?;
+    let png_header: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+    std::fs::write(repo.path().join("image.png"), png_header)?;
+    git::run_git(repo.path(), &config, &["add", "image.png"])?;
+    git::run_git(repo.path(), &config, &["commit", "-m", "Add binary file"])?;
+    repo.checkout("master")?;
+
+    // The branch has a binary file that master doesn't - should be unmerged
+    let branches = list_branches(&repo, &config)?;
+    let feature = find_branch(&branches, "feature/binary").expect("binary branch should be listed");
+
+    assert!(
+        feature.merge_status.requires_caution(),
+        "Branch with binary file unique to it should be unmerged, got {:?}",
+        feature.merge_status
+    );
+    assert_eq!(feature.merge_status, MergeStatus::Unmerged);
+    Ok(())
+}
+
+#[test]
+fn test_binary_file_merged_then_modified_detected_as_unmerged() -> anyhow::Result<()> {
+    let repo = TestRepo::new()?;
+    let config = test_config();
+
+    // Create a branch with a binary file
+    repo.checkout_new_branch("feature/binary-mod")?;
+    let png_v1: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+    std::fs::write(repo.path().join("image.png"), png_v1)?;
+    git::run_git(repo.path(), &config, &["add", "image.png"])?;
+    git::run_git(repo.path(), &config, &["commit", "-m", "Add binary file"])?;
+
+    // Squash merge to master
+    repo.checkout("master")?;
+    repo.squash_merge("feature/binary-mod")?;
+
+    // Modify the binary file differently on master
+    let png_v2: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0xFF, 0xFF, 0xFF, 0xFF];
+    std::fs::write(repo.path().join("image.png"), png_v2)?;
+    git::run_git(repo.path(), &config, &["add", "image.png"])?;
+    git::run_git(
+        repo.path(),
+        &config,
+        &["commit", "-m", "Modify binary file"],
+    )?;
+
+    // The branch's binary differs from master's - should be unmerged
+    let branches = list_branches(&repo, &config)?;
+    let feature =
+        find_branch(&branches, "feature/binary-mod").expect("binary-mod branch should be listed");
+
+    assert!(
+        feature.merge_status.requires_caution(),
+        "Branch with different binary content should be unmerged, got {:?}",
         feature.merge_status
     );
     assert_eq!(feature.merge_status, MergeStatus::Unmerged);
@@ -504,13 +654,43 @@ fn test_delete_branches_batch_continues_on_failure() -> anyhow::Result<()> {
 }
 
 #[test]
-fn test_unclear_status_branches_detected() -> anyhow::Result<()> {
-    // This test verifies that branches with conflicts during merge-tree
-    // are marked as Unclear, not Unmerged.
-    //
-    // Setup: Create a branch, squash-merge it, then modify the same file
-    // on master. The original branch will have "unclear" status because
-    // merge-tree shows conflicts, but the changes might be in master.
+fn test_squash_merged_branch_still_merged_when_master_ahead() -> anyhow::Result<()> {
+    // When a branch is squash-merged and master moves ahead with NEW content,
+    // the branch should still be considered merged because all its content is in master.
+    let repo = TestRepo::new()?;
+    let config = test_config();
+
+    // Create and squash merge a feature branch
+    repo.checkout_new_branch("feature/merged-ahead")?;
+    repo.add_commit("feature work")?;
+    repo.checkout("master")?;
+    repo.squash_merge("feature/merged-ahead")?;
+
+    // Master moves ahead with additional commits (different files)
+    repo.add_commit("more master work")?;
+    repo.add_commit("even more master work")?;
+
+    // List branches - feature should still be merged
+    // because all its content is in master (master just has more)
+    let branches = list_branches(&repo, &config)?;
+    let feature = find_branch(&branches, "feature/merged-ahead")
+        .expect("merged-ahead branch should be listed");
+
+    assert!(
+        feature.merge_status.is_safely_deletable(),
+        "Squash-merged branch should be safe to delete even when master is ahead, got {:?}",
+        feature.merge_status
+    );
+    assert_eq!(feature.merge_status, MergeStatus::Merged);
+    Ok(())
+}
+
+#[test]
+fn test_squash_merged_then_modified_detected_as_unmerged() -> anyhow::Result<()> {
+    // When a branch is squash-merged and then master continues to evolve,
+    // the branch will have differences compared to current master.
+    // This correctly shows as "Unmerged" because merging the branch would
+    // introduce changes (even though they were previously merged).
     let repo = TestRepo::new()?;
     let config = test_config();
 
@@ -524,7 +704,7 @@ fn test_unclear_status_branches_detected() -> anyhow::Result<()> {
     repo.checkout("master")?;
     repo.squash_merge("feature/conflict-test")?;
 
-    // Now modify the same file on master again (creates conflict scenario)
+    // Now modify the same file on master again
     std::fs::write(repo.path().join("README.md"), "# Master Content\n")?;
     git::run_git(repo.path(), &config, &["add", "README.md"])?;
     git::run_git(
@@ -533,22 +713,19 @@ fn test_unclear_status_branches_detected() -> anyhow::Result<()> {
         &["commit", "-m", "master modifies readme"],
     )?;
 
-    // List branches - feature/conflict-test should be unclear
+    // List branches - feature/conflict-test shows as unmerged because
+    // git diff master...branch shows the file differs
     let branches = list_branches(&repo, &config)?;
     let feature = find_branch(&branches, "feature/conflict-test")
         .expect("conflict-test branch should be listed");
 
     assert!(
-        feature.merge_status.is_uncertain(),
-        "Branch with conflicting changes should be unclear, got {:?}",
+        feature.merge_status.requires_caution(),
+        "Branch with diverged content should be unmerged, got {:?}",
         feature.merge_status
     );
     Ok(())
 }
-
-// =============================================================================
-// run_interactive tests
-// =============================================================================
 
 #[test]
 fn test_run_interactive_deletes_selected_merged_branch() -> anyhow::Result<()> {

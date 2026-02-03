@@ -200,6 +200,18 @@ impl TestRepo {
         run_git(&self.path, &test_config(), &["branch", "-D", name])?;
         Ok(())
     }
+
+    /// Gets the commit hash of HEAD.
+    pub fn get_head_commit(&self) -> Result<String> {
+        let output = run_git(&self.path, &test_config(), &["rev-parse", "HEAD"])?;
+        Ok(output.trim().to_string())
+    }
+
+    /// Cherry-picks a commit onto the current branch.
+    pub fn cherry_pick(&self, commit: &str) -> Result<()> {
+        run_git(&self.path, &test_config(), &["cherry-pick", commit])?;
+        Ok(())
+    }
 }
 
 /// Callbacks that count invocations for testing.

@@ -111,7 +111,7 @@ pub fn format_branch_line(branch: &BranchInfo, widths: &BranchListWidths) -> Str
 /// # Example output
 ///
 /// - `feature/login          merged    remote: gone`
-/// - `hotfix/v1              unclear   remote: exists  (may be squash-merged)`
+/// - `hotfix/v1              unclear   remote: exists  (status unknown)`
 /// - `my-branch              (current) remote: gone`
 #[must_use]
 pub fn format_branch_selection_item(branch: &BranchInfo, widths: &BranchListWidths) -> String {
@@ -144,7 +144,7 @@ fn format_branch_warning_compact(branch: &BranchInfo) -> String {
 
     let status = &branch.merge_status;
     if status.is_uncertain() {
-        format!("  {}", "(may be squash-merged)".yellow())
+        format!("  {}", "(status unknown)".yellow())
     } else if status.requires_caution() {
         format!("  {}", "(unmerged)".yellow())
     } else {
@@ -233,7 +233,7 @@ fn branch_status_text(branch: &BranchInfo) -> &'static str {
 /// Returns plain text for merge status.
 fn merge_status_text(status: &MergeStatus) -> &'static str {
     match status {
-        MergeStatus::Merged | MergeStatus::SquashMerged => "merged",
+        MergeStatus::Merged => "merged",
         MergeStatus::Unmerged => "unmerged",
         MergeStatus::Unclear => "unclear",
     }
@@ -290,7 +290,7 @@ fn format_branch_warning(branch: &BranchInfo) -> String {
 
     let status = &branch.merge_status;
     if status.is_uncertain() {
-        format!("   {}", "may be squash-merged".yellow())
+        format!("   {}", "status unknown".yellow())
     } else if status.requires_caution() {
         format!("   {}", "unmerged".yellow())
     } else {
@@ -538,7 +538,7 @@ impl CleanupCallbacks for TerminalCleanupCallbacks {
     fn on_unclear_warning(&self) {
         if !self.config.is_quiet() {
             eprintln!(
-                "\n{}: Some branches have 'unclear' status (may be squash-merged but can't verify).",
+                "\n{}: Some branches have 'unclear' status (could not verify merge status).",
                 "Note".yellow()
             );
         }
@@ -681,7 +681,7 @@ mod tests {
         let branch = make_branch("unclear-branch", false, MergeStatus::Unclear);
         let widths = BranchListWidths::from_branches(std::slice::from_ref(&branch));
         let item = format_branch_selection_item(&branch, &widths);
-        assert!(item.contains("squash-merged"));
+        assert!(item.contains("status unknown"));
     }
 
     #[test]
@@ -768,7 +768,7 @@ mod tests {
     fn test_format_branch_warning_unclear() {
         let branch = make_branch("feature", false, MergeStatus::Unclear);
         let warning = format_branch_warning(&branch);
-        assert!(warning.contains("squash-merged"));
+        assert!(warning.contains("status unknown"));
     }
 
     #[test]
