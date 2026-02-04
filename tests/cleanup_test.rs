@@ -210,8 +210,18 @@ fn test_cherry_picked_branch_detected_as_merged() -> anyhow::Result<()> {
         "Cherry-picked branch should be safely deletable, got {:?}",
         feature.merge_status
     );
-    // Note: cherry-picks are detected by git branch --merged, so they return Merged
-    assert_eq!(feature.merge_status, MergeStatus::Merged);
+    // Cherry-pick detection depends on timing: if commits have identical timestamps,
+    // git creates the same SHA and git branch --merged detects it (Merged).
+    // Otherwise, git cherry detects the matching patch-id (SquashMerged).
+    // Both are correct - what matters is that it's safely deletable.
+    assert!(
+        matches!(
+            feature.merge_status,
+            MergeStatus::Merged | MergeStatus::SquashMerged
+        ),
+        "Expected Merged or SquashMerged, got {:?}",
+        feature.merge_status
+    );
     Ok(())
 }
 
