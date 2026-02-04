@@ -302,6 +302,168 @@ pub fn merge_base(
         .with_context(|| format!("Failed to run merge-base for '{}' and '{}'", ref1, ref2))
 }
 
+/// Checks if all commits in a branch have been applied to the target branch.
+///
+/// Uses `git cherry target branch` which compares commits by patch-id (content hash).
+/// Returns true if ALL commits show `-` prefix (meaning they're in target).
+/// Returns false if ANY commit shows `+` prefix (meaning it's NOT in target).
+///
+/// Note: This works for single-commit squash merges but NOT for multi-commit
+/// squash merges (the combined patch differs from individual patches).
+pub fn is_branch_merged_by_cherry(
+    repo: &Path,
+    config: &Config,
+    target: &str,
+    branch: &str,
+    logger: GitLogger,
+) -> anyhow::Result<bool> {
+    validate_branch_name(target)?;
+    validate_branch_name(branch)?;
+    let output = run_git_with_logger(repo, config, &["cherry", target, branch], logger)
+        .with_context(|| format!("Failed to run git cherry {} {}", target, branch))?;
+
+    // Empty output means no commits unique to branch (it's at the same point or behind)
+    if output.trim().is_empty() {
+        return Ok(true);
+    }
+
+    // All lines must start with '-' (commit is in target) for branch to be fully merged
+    // Any '+' means there's a commit not in target
+    Ok(output.lines().all(|line| line.starts_with('-')))
+}
+
+/// Gets files added by a branch since it diverged from another branch.
+///
+/// Returns a list of file paths that the branch introduced (not just modified).
+/// This is used to check if a squash-merged branch's additions are in the target.
+pub fn get_files_added_by_branch(
+    repo: &Path,
+    config: &Config,
+    target: &str,
+    branch: &str,
+    logger: GitLogger,
+) -> anyhow::Result<Vec<String>> {
+    validate_branch_name(target)?;
+    validate_branch_name(branch)?;
+
+    // Get merge-base first
+    let merge_base = run_git_with_logger(repo, config, &["merge-base", target, branch], logger)
+        .with_context(|| format!("Failed to find merge-base for {} and {}", target, branch))?;
+    let merge_base = merge_base.trim();
+
+    // Get files added by branch since merge-base
+    let output = run_git_with_logger(
+        repo,
+        config,
+        &["diff", "--name-only", "--diff-filter=A", merge_base, branch],
+        logger,
+    )
+    .with_context(|| format!("Failed to get files added by {}", branch))?;
+
+    Ok(output
+        .lines()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect())
+}
+
+/// Checks if specific files exist in a branch.
+pub fn files_exist_in_branch(
+    repo: &Path,
+    config: &Config,
+    branch: &str,
+    files: &[String],
+    logger: GitLogger,
+) -> anyhow::Result<bool> {
+    validate_branch_name(branch)?;
+
+    for file in files {
+        // Use ls-tree to check if file exists in branch
+        // ls-tree returns empty output for non-existent files, error for invalid refs
+        let output = run_git_with_logger(
+            repo,
+            config,
+            &["ls-tree", "--name-only", branch, "--", file],
+            logger,
+        )
+        .with_context(|| format!("Failed to check if {} exists in {}", file, branch))?;
+
+        if output.trim().is_empty() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Checks if a branch's modifications are present in the target branch.
+///
+/// For branches that only modify existing files (no additions), this checks
+/// if those modifications have been incorporated into the target. Uses
+/// `git diff target branch -- <modified files>` scoped to only the files
+/// the branch touched.
+///
+/// Returns true if the branch has no unique content (modifications are in target).
+pub fn branch_changes_in_target(
+    repo: &Path,
+    config: &Config,
+    target: &str,
+    branch: &str,
+    logger: GitLogger,
+) -> anyhow::Result<bool> {
+    validate_branch_name(target)?;
+    validate_branch_name(branch)?;
+
+    // Get merge-base
+    let merge_base = run_git_with_logger(repo, config, &["merge-base", target, branch], logger)
+        .with_context(|| format!("Failed to find merge-base for {} and {}", target, branch))?;
+    let merge_base = merge_base.trim();
+
+    // Get files modified by branch since merge-base (not added, just modified)
+    let modified_output = run_git_with_logger(
+        repo,
+        config,
+        &["diff", "--name-only", "--diff-filter=M", merge_base, branch],
+        logger,
+    )
+    .with_context(|| format!("Failed to get files modified by {}", branch))?;
+
+    let modified_files: Vec<&str> = modified_output.lines().collect();
+
+    // If no files were modified, branch only deleted files or is empty
+    // Fall back to checking if there are any differences
+    if modified_files.is_empty() {
+        let diff = run_git_with_logger(repo, config, &["diff", target, branch], logger)
+            .with_context(|| format!("Failed to diff {} {}", target, branch))?;
+        return Ok(diff.trim().is_empty());
+    }
+
+    // Check if the branch's version of modified files matches target's version
+    // Use git diff with specific file paths
+    let mut args = vec!["diff", "--quiet", target, branch, "--"];
+    args.extend(modified_files);
+
+    // Use run_git_output directly to distinguish between:
+    // - Exit 0: no differences
+    // - Exit 1: differences exist (not an error)
+    // - Other: actual errors (timeout, invalid ref)
+    let output = run_git_output(repo, config, &args, logger)
+        .with_context(|| format!("Failed to diff {} vs {} for modified files", target, branch))?;
+
+    if output.status.success() {
+        Ok(true) // No differences
+    } else if output.status.code() == Some(1) {
+        Ok(false) // Files differ (expected behavior for git diff --quiet)
+    } else {
+        // Unexpected exit code - treat as error
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!(
+            "git diff --quiet failed with unexpected exit code {:?}: {}",
+            output.status.code(),
+            stderr
+        )
+    }
+}
+
 /// Returns numstat diff output showing line changes between two branches.
 ///
 /// Uses `git diff --numstat from_branch to_branch` which outputs:

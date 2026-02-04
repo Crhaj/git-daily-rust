@@ -344,3 +344,234 @@ fn test_delete_branch_fails_on_unmerged_branch() -> anyhow::Result<()> {
     assert!(result.is_err());
     Ok(())
 }
+
+#[test]
+fn test_is_branch_merged_by_cherry_detects_cherry_picked_commit() -> anyhow::Result<()> {
+    let config = test_config();
+    let repo = TestRepo::new()?;
+
+    // Create feature branch with a commit
+    git::run_git(repo.path(), &config, &["checkout", "-b", "feature"])?;
+    std::fs::write(repo.path().join("feature.txt"), "feature content\n")?;
+    git::run_git(repo.path(), &config, &["add", "feature.txt"])?;
+    git::run_git(repo.path(), &config, &["commit", "-m", "Add feature"])?;
+    let feature_commit = git::get_current_commit(repo.path(), &config, logger())?;
+
+    // Cherry-pick to master
+    git::run_git(repo.path(), &config, &["checkout", "master"])?;
+    git::run_git(repo.path(), &config, &["cherry-pick", &feature_commit])?;
+
+    // git cherry should show the commit is already in master
+    let result =
+        git::is_branch_merged_by_cherry(repo.path(), &config, "master", "feature", logger())?;
+    assert!(result, "cherry-picked branch should be detected as merged");
+    Ok(())
+}
+
+#[test]
+fn test_is_branch_merged_by_cherry_returns_false_for_unmerged() -> anyhow::Result<()> {
+    let config = test_config();
+    let repo = TestRepo::new()?;
+
+    // Create feature branch with a commit (not merged)
+    git::run_git(repo.path(), &config, &["checkout", "-b", "feature"])?;
+    std::fs::write(repo.path().join("feature.txt"), "feature content\n")?;
+    git::run_git(repo.path(), &config, &["add", "feature.txt"])?;
+    git::run_git(repo.path(), &config, &["commit", "-m", "Add feature"])?;
+    git::run_git(repo.path(), &config, &["checkout", "master"])?;
+
+    let result =
+        git::is_branch_merged_by_cherry(repo.path(), &config, "master", "feature", logger())?;
+    assert!(!result, "unmerged branch should not be detected as merged");
+    Ok(())
+}
+
+#[test]
+fn test_is_branch_merged_by_cherry_rejects_invalid_branch_name() -> anyhow::Result<()> {
+    let config = test_config();
+    let repo = TestRepo::new()?;
+
+    let result =
+        git::is_branch_merged_by_cherry(repo.path(), &config, "master", "bad;name", logger());
+    assert!(result.is_err());
+    Ok(())
+}
+
+#[test]
+fn test_get_files_added_by_branch_returns_new_files() -> anyhow::Result<()> {
+    let config = test_config();
+    let repo = TestRepo::new()?;
+
+    git::run_git(repo.path(), &config, &["checkout", "-b", "feature"])?;
+    std::fs::write(repo.path().join("new_file.txt"), "new content\n")?;
+    std::fs::write(repo.path().join("another.txt"), "another\n")?;
+    git::run_git(repo.path(), &config, &["add", "."])?;
+    git::run_git(repo.path(), &config, &["commit", "-m", "Add files"])?;
+
+    let added =
+        git::get_files_added_by_branch(repo.path(), &config, "master", "feature", logger())?;
+    assert!(added.contains(&"new_file.txt".to_string()));
+    assert!(added.contains(&"another.txt".to_string()));
+    assert_eq!(added.len(), 2);
+    Ok(())
+}
+
+#[test]
+fn test_get_files_added_by_branch_excludes_modified_files() -> anyhow::Result<()> {
+    let config = test_config();
+    let repo = TestRepo::new()?;
+
+    git::run_git(repo.path(), &config, &["checkout", "-b", "feature"])?;
+    // Modify existing file (README.md exists from TestRepo::new)
+    std::fs::write(repo.path().join("README.md"), "modified content\n")?;
+    git::run_git(repo.path(), &config, &["add", "README.md"])?;
+    git::run_git(repo.path(), &config, &["commit", "-m", "Modify readme"])?;
+
+    let added =
+        git::get_files_added_by_branch(repo.path(), &config, "master", "feature", logger())?;
+    assert!(
+        added.is_empty(),
+        "modified files should not appear in added list"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_get_files_added_by_branch_rejects_invalid_branch_name() -> anyhow::Result<()> {
+    let config = test_config();
+    let repo = TestRepo::new()?;
+
+    let result =
+        git::get_files_added_by_branch(repo.path(), &config, "master", "-invalid", logger());
+    assert!(result.is_err());
+    Ok(())
+}
+
+#[test]
+fn test_files_exist_in_branch_finds_existing_files() -> anyhow::Result<()> {
+    let config = test_config();
+    let repo = TestRepo::new()?;
+
+    // README.md exists in master from TestRepo::new
+    let files = vec!["README.md".to_string()];
+    let exists = git::files_exist_in_branch(repo.path(), &config, "master", &files, logger())?;
+    assert!(exists);
+    Ok(())
+}
+
+#[test]
+fn test_files_exist_in_branch_returns_false_for_missing() -> anyhow::Result<()> {
+    let config = test_config();
+    let repo = TestRepo::new()?;
+
+    let files = vec!["does_not_exist.txt".to_string()];
+    let exists = git::files_exist_in_branch(repo.path(), &config, "master", &files, logger())?;
+    assert!(!exists);
+    Ok(())
+}
+
+#[test]
+fn test_files_exist_in_branch_returns_false_if_any_missing() -> anyhow::Result<()> {
+    let config = test_config();
+    let repo = TestRepo::new()?;
+
+    let files = vec!["README.md".to_string(), "missing.txt".to_string()];
+    let exists = git::files_exist_in_branch(repo.path(), &config, "master", &files, logger())?;
+    assert!(!exists, "should return false if any file is missing");
+    Ok(())
+}
+
+#[test]
+fn test_files_exist_in_branch_rejects_invalid_branch_name() -> anyhow::Result<()> {
+    let config = test_config();
+    let repo = TestRepo::new()?;
+
+    let files = vec!["README.md".to_string()];
+    let result = git::files_exist_in_branch(repo.path(), &config, "bad;branch", &files, logger());
+    assert!(result.is_err());
+    Ok(())
+}
+
+#[test]
+fn test_branch_changes_in_target_detects_incorporated_changes() -> anyhow::Result<()> {
+    let config = test_config();
+    let repo = TestRepo::new()?;
+
+    // Create feature branch that modifies README
+    git::run_git(repo.path(), &config, &["checkout", "-b", "feature"])?;
+    std::fs::write(repo.path().join("README.md"), "# Updated\n")?;
+    git::run_git(repo.path(), &config, &["add", "README.md"])?;
+    git::run_git(repo.path(), &config, &["commit", "-m", "Update readme"])?;
+
+    // Merge into master (changes are now in master)
+    git::run_git(repo.path(), &config, &["checkout", "master"])?;
+    git::run_git(repo.path(), &config, &["merge", "feature"])?;
+
+    let in_target =
+        git::branch_changes_in_target(repo.path(), &config, "master", "feature", logger())?;
+    assert!(in_target, "merged changes should be detected as in target");
+    Ok(())
+}
+
+#[test]
+fn test_branch_changes_in_target_detects_unincorporated_changes() -> anyhow::Result<()> {
+    let config = test_config();
+    let repo = TestRepo::new()?;
+
+    // Create feature branch that modifies README (not merged)
+    git::run_git(repo.path(), &config, &["checkout", "-b", "feature"])?;
+    std::fs::write(repo.path().join("README.md"), "# Updated\n")?;
+    git::run_git(repo.path(), &config, &["add", "README.md"])?;
+    git::run_git(repo.path(), &config, &["commit", "-m", "Update readme"])?;
+    git::run_git(repo.path(), &config, &["checkout", "master"])?;
+
+    let in_target =
+        git::branch_changes_in_target(repo.path(), &config, "master", "feature", logger())?;
+    assert!(
+        !in_target,
+        "unmerged changes should not be detected as in target"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_branch_changes_in_target_with_squash_merge() -> anyhow::Result<()> {
+    let config = test_config();
+    let repo = TestRepo::new()?;
+
+    // Create feature branch with multiple commits modifying README
+    git::run_git(repo.path(), &config, &["checkout", "-b", "feature"])?;
+    std::fs::write(repo.path().join("README.md"), "# Step 1\n")?;
+    git::run_git(repo.path(), &config, &["add", "README.md"])?;
+    git::run_git(repo.path(), &config, &["commit", "-m", "Step 1"])?;
+    std::fs::write(repo.path().join("README.md"), "# Step 1\n\n## Step 2\n")?;
+    git::run_git(repo.path(), &config, &["add", "README.md"])?;
+    git::run_git(repo.path(), &config, &["commit", "-m", "Step 2"])?;
+
+    // Squash merge into master (simulated by copying final content)
+    git::run_git(repo.path(), &config, &["checkout", "master"])?;
+    std::fs::write(repo.path().join("README.md"), "# Step 1\n\n## Step 2\n")?;
+    git::run_git(repo.path(), &config, &["add", "README.md"])?;
+    git::run_git(
+        repo.path(),
+        &config,
+        &["commit", "-m", "Squash merge feature"],
+    )?;
+
+    // Files match, so changes are detected as in target
+    let in_target =
+        git::branch_changes_in_target(repo.path(), &config, "master", "feature", logger())?;
+    assert!(in_target, "squash-merged changes should be detected");
+    Ok(())
+}
+
+#[test]
+fn test_branch_changes_in_target_rejects_invalid_branch_name() -> anyhow::Result<()> {
+    let config = test_config();
+    let repo = TestRepo::new()?;
+
+    let result =
+        git::branch_changes_in_target(repo.path(), &config, "master", "bad;name", logger());
+    assert!(result.is_err());
+    Ok(())
+}

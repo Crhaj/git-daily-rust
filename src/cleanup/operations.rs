@@ -39,13 +39,13 @@ pub fn detect_main_branch(
 
 /// Determines if a branch is merged into main.
 ///
-/// Uses `git diff main branch` (tree comparison) to check if the branches have
-/// identical content. If the diff is empty, the branch is considered merged
-/// (works for regular merges, squash merges, and cherry-picks).
+/// Uses `git cherry main branch` (patch-based comparison) to check if all
+/// commits in the branch have been applied to main. This correctly detects
+/// squash merges even when main has evolved after the merge.
 ///
 /// Note: This function calls git for each invocation. For checking multiple
 /// branches, use [`list_branches`] which pre-computes the traditionally-merged
-/// set for O(1) lookups, only calling diff for branches not in that set.
+/// set for O(1) lookups, only calling cherry for branches not in that set.
 #[allow(dead_code)]
 pub(crate) fn check_merge_status(
     repo: &Path,
@@ -54,14 +54,14 @@ pub(crate) fn check_merge_status(
     config: &Config,
     logger: GitLogger,
 ) -> MergeStatus {
-    check_merge_status_via_diff(repo, branch, main_branch, config, logger)
+    check_merge_status_via_cherry(repo, branch, main_branch, config, logger)
 }
 
 /// Fetches the set of branches merged into the main branch.
 ///
 /// Returns an empty set if the git command fails. This is intentional:
-/// branches not found in this set will fall through to diff-based detection,
-/// which provides a more accurate (though slower) check.
+/// branches not found in this set will fall through to cherry-based detection,
+/// which handles squash merges correctly.
 ///
 /// In verbose mode, logs a warning when falling back to slower detection.
 fn get_merged_branches(
@@ -85,69 +85,78 @@ fn get_merged_branches(
         .collect()
 }
 
-/// Checks if a branch is merged by verifying its content is fully contained in main.
+/// Checks if a branch is merged using a hybrid approach.
 ///
-/// Uses a two-step approach:
-/// 1. Check for deleted files (files unique to branch, including empty files)
-/// 2. Check numstat for line-level content unique to branch
+/// Strategy:
+/// 1. `git cherry` - detects single-commit squash merges and cherry-picks
+/// 2. If cherry fails, check if branch's changes exist in main:
+///    - For added files: verify they exist in main
+///    - For modified-only branches: verify modifications are in main
 ///
 /// This correctly handles:
-/// - Regular merges (branch is ancestor of main)
-/// - Squash merges (content identical, history differs)
-/// - Cherry-picks (commits applied to main)
-/// - Main ahead after merge (main has additional commits)
-/// - Empty files unique to branch
-fn check_merge_status_via_diff(
+/// - Regular merges (caught by pre-computed `git branch --merged`)
+/// - Single-commit squash merges (cherry detects matching patch)
+/// - Multi-commit squash merges (fallback checks changes are in main)
+/// - Cherry-picks (cherry detects matching patches)
+/// - Main ahead after merge (compares from merge-base)
+///
+/// Returns `Unclear` when git commands fail (logged in verbose mode).
+fn check_merge_status_via_cherry(
     repo: &Path,
     branch: &str,
     main_branch: &str,
     config: &Config,
     logger: GitLogger,
 ) -> MergeStatus {
-    // Step 1: Check for files that exist in branch but not in main.
-    // This catches empty files and other edge cases that numstat misses.
-    match git::has_deleted_files(repo, config, branch, main_branch, logger) {
-        Ok(true) => return MergeStatus::Unmerged,
+    // Step 1: Try git cherry (works for single-commit squash and cherry-picks)
+    match git::is_branch_merged_by_cherry(repo, config, main_branch, branch, logger) {
+        Ok(true) => return MergeStatus::Merged,
         Ok(false) => {}
-        Err(_) => return MergeStatus::Unclear,
+        Err(e) => {
+            log_merge_check_error(config, branch, "git cherry", &e);
+            return MergeStatus::Unclear;
+        }
     }
 
-    // Step 2: Check for line-level content unique to branch.
-    // Format: <added>\t<removed>\t<filename>
-    match git::diff_numstat(repo, config, branch, main_branch, logger) {
-        Ok(output) if output.trim().is_empty() => {
-            // Empty diff = identical trees = definitely merged
-            MergeStatus::Merged
-        }
-        Ok(output) => {
-            let has_unique_content = output.lines().any(has_removals_in_numstat_line);
-            if has_unique_content {
-                MergeStatus::Unmerged
-            } else {
-                MergeStatus::Merged
+    // Step 2: Cherry showed unmerged commits - could be multi-commit squash merge
+    // Check if files ADDED by the branch exist in main
+    let added_files =
+        match git::get_files_added_by_branch(repo, config, main_branch, branch, logger) {
+            Ok(files) => files,
+            Err(e) => {
+                log_merge_check_error(config, branch, "get added files", &e);
+                return MergeStatus::Unclear;
             }
+        };
+
+    // If branch added files, check if they exist in main
+    if !added_files.is_empty() {
+        return match git::files_exist_in_branch(repo, config, main_branch, &added_files, logger) {
+            Ok(true) => MergeStatus::Merged,
+            Ok(false) => MergeStatus::Unmerged,
+            Err(e) => {
+                log_merge_check_error(config, branch, "check files exist", &e);
+                MergeStatus::Unclear
+            }
+        };
+    }
+
+    // Step 3: Branch didn't add files - only modified existing ones
+    // Check if those modifications are in main by comparing content
+    match git::branch_changes_in_target(repo, config, main_branch, branch, logger) {
+        Ok(true) => MergeStatus::Merged,
+        Ok(false) => MergeStatus::Unmerged,
+        Err(e) => {
+            log_merge_check_error(config, branch, "check modifications", &e);
+            MergeStatus::Unclear
         }
-        Err(_) => MergeStatus::Unclear,
     }
 }
 
-/// Checks if a numstat line indicates content unique to the source branch.
-///
-/// Format: `<added>\t<removed>\t<filename>`
-/// - Binary files show `-` for both columns
-/// - Returns true if the line shows removals (content in source not in target)
-fn has_removals_in_numstat_line(line: &str) -> bool {
-    let mut parts = line.split('\t');
-    let added = parts.next();
-    let removed = parts.next();
-
-    match (added, removed) {
-        // Binary file: both columns show "-", indicating a binary difference
-        (Some("-"), Some("-")) => true,
-        // Text file: check if removed count > 0
-        (Some(_), Some(r)) => r.parse::<u32>().map_or(true, |n| n > 0),
-        // Malformed output: be conservative
-        _ => true,
+/// Logs merge check errors in verbose mode.
+fn log_merge_check_error(config: &Config, branch: &str, operation: &str, error: &anyhow::Error) {
+    if config.is_verbose() {
+        eprintln!("Warning: {} failed for '{}': {}", operation, branch, error);
     }
 }
 
@@ -257,8 +266,8 @@ fn check_merge_status_with_cache(
         return MergeStatus::Merged;
     }
 
-    // Slow path: diff-based check for branches not in merged set
-    check_merge_status_via_diff(repo, branch, main_branch, config, logger)
+    // Slow path: cherry-based check for squash merges not in merged set
+    check_merge_status_via_cherry(repo, branch, main_branch, config, logger)
 }
 
 /// Detects main branch from already-fetched branch list output.

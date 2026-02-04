@@ -20,23 +20,19 @@ pub struct BranchInfo {
 
 /// The merge status of a branch relative to the main branch.
 ///
-/// Detected using a two-step approach:
-/// 1. `git diff --diff-filter=D` to check for files unique to the branch
-/// 2. `git diff --numstat` to check for line-level content unique to the branch
+/// Detected using a hybrid approach:
+/// 1. `git branch --merged` for traditional merges (O(1) from cache)
+/// 2. `git cherry` for single-commit squash merges (patch-id comparison)
+/// 3. File existence check for multi-commit squash merges
 ///
-/// A branch is considered merged if all its content (files and lines) exists in main,
-/// even if main has moved ahead with additional commits.
+/// This correctly handles all merge types and cases where main has evolved
+/// (deleted files, modified files) after the merge.
 ///
 /// # Safety Levels
 ///
-/// - **Safe** (`Merged`): No data loss risk - all branch content is in main
+/// - **Safe** (`Merged`): No data loss risk - changes incorporated into main
 /// - **Uncertain** (`Unclear`): Could not verify status
-/// - **Dangerous** (`Unmerged`): Has unique content not in main
-///
-/// # Limitations
-///
-/// - Mode-only changes (e.g., chmod +x) without content changes are not detected
-/// - Renames are shown as delete+add, which conservatively triggers "unmerged"
+/// - **Dangerous** (`Unmerged`): Has changes not in main
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use]
 pub enum MergeStatus {

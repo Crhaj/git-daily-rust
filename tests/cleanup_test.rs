@@ -78,6 +78,91 @@ fn test_squash_merge_detected_as_merged() -> anyhow::Result<()> {
 }
 
 #[test]
+fn test_multi_commit_squash_merge_detected_as_merged() -> anyhow::Result<()> {
+    let repo = TestRepo::new()?;
+    let config = test_config();
+
+    // Create a feature branch with MULTIPLE commits
+    repo.checkout_new_branch("feature/multi")?;
+    repo.add_commit("commit 1")?;
+    repo.add_commit("commit 2")?;
+    repo.add_commit("commit 3")?;
+    repo.checkout("master")?;
+    repo.squash_merge("feature/multi")?;
+
+    // Multi-commit squash merge should be detected as merged
+    // (git cherry alone fails for this, but hybrid approach catches it)
+    let branches = list_branches(&repo, &config)?;
+    let feature = find_branch(&branches, "feature/multi").expect("multi branch should be listed");
+
+    assert!(
+        feature.merge_status.is_safely_deletable(),
+        "Multi-commit squash merge should be safely deletable, got {:?}",
+        feature.merge_status
+    );
+    assert_eq!(feature.merge_status, MergeStatus::Merged);
+    Ok(())
+}
+
+#[test]
+fn test_multi_commit_modifications_only_unmerged() -> anyhow::Result<()> {
+    let repo = TestRepo::new()?;
+    let config = test_config();
+
+    // Create a feature branch with multiple commits that only MODIFY existing files
+    repo.checkout_new_branch("feature/mods-only")?;
+    std::fs::write(repo.path().join("README.md"), "# Modified once\n")?;
+    git::run_git(repo.path(), &config, &["add", "README.md"])?;
+    git::run_git(repo.path(), &config, &["commit", "-m", "mod 1"])?;
+    std::fs::write(repo.path().join("README.md"), "# Modified twice\n")?;
+    git::run_git(repo.path(), &config, &["add", "README.md"])?;
+    git::run_git(repo.path(), &config, &["commit", "-m", "mod 2"])?;
+    repo.checkout("master")?;
+    // DON'T MERGE - this should be detected as unmerged
+
+    let branches = list_branches(&repo, &config)?;
+    let feature =
+        find_branch(&branches, "feature/mods-only").expect("mods-only branch should be listed");
+
+    assert!(
+        feature.merge_status.requires_caution(),
+        "Unmerged branch with only modifications should be unmerged, got {:?}",
+        feature.merge_status
+    );
+    assert_eq!(feature.merge_status, MergeStatus::Unmerged);
+    Ok(())
+}
+
+#[test]
+fn test_multi_commit_modifications_only_squash_merged() -> anyhow::Result<()> {
+    let repo = TestRepo::new()?;
+    let config = test_config();
+
+    // Create a feature branch with multiple commits that only MODIFY existing files
+    repo.checkout_new_branch("feature/mods-merged")?;
+    std::fs::write(repo.path().join("README.md"), "# Modified once\n")?;
+    git::run_git(repo.path(), &config, &["add", "README.md"])?;
+    git::run_git(repo.path(), &config, &["commit", "-m", "mod 1"])?;
+    std::fs::write(repo.path().join("README.md"), "# Modified twice\n")?;
+    git::run_git(repo.path(), &config, &["add", "README.md"])?;
+    git::run_git(repo.path(), &config, &["commit", "-m", "mod 2"])?;
+    repo.checkout("master")?;
+    repo.squash_merge("feature/mods-merged")?;
+
+    let branches = list_branches(&repo, &config)?;
+    let feature =
+        find_branch(&branches, "feature/mods-merged").expect("mods-merged branch should be listed");
+
+    assert!(
+        feature.merge_status.is_safely_deletable(),
+        "Squash-merged branch with only modifications should be merged, got {:?}",
+        feature.merge_status
+    );
+    assert_eq!(feature.merge_status, MergeStatus::Merged);
+    Ok(())
+}
+
+#[test]
 fn test_unmerged_branch_detected_as_unmerged() -> anyhow::Result<()> {
     let repo = TestRepo::new()?;
     let config = test_config();
@@ -212,7 +297,7 @@ fn test_binary_file_unique_to_branch_detected_as_unmerged() -> anyhow::Result<()
 }
 
 #[test]
-fn test_binary_file_merged_then_modified_detected_as_unmerged() -> anyhow::Result<()> {
+fn test_binary_file_merged_then_modified_still_merged() -> anyhow::Result<()> {
     let repo = TestRepo::new()?;
     let config = test_config();
 
@@ -237,17 +322,18 @@ fn test_binary_file_merged_then_modified_detected_as_unmerged() -> anyhow::Resul
         &["commit", "-m", "Modify binary file"],
     )?;
 
-    // The branch's binary differs from master's - should be unmerged
+    // The branch's commit was applied to master (squash merged), so it's merged
+    // even though master later modified the same file
     let branches = list_branches(&repo, &config)?;
     let feature =
         find_branch(&branches, "feature/binary-mod").expect("binary-mod branch should be listed");
 
     assert!(
-        feature.merge_status.requires_caution(),
-        "Branch with different binary content should be unmerged, got {:?}",
+        feature.merge_status.is_safely_deletable(),
+        "Squash-merged branch should be safe to delete even if master modified the file after, got {:?}",
         feature.merge_status
     );
-    assert_eq!(feature.merge_status, MergeStatus::Unmerged);
+    assert_eq!(feature.merge_status, MergeStatus::Merged);
     Ok(())
 }
 
@@ -686,23 +772,22 @@ fn test_squash_merged_branch_still_merged_when_master_ahead() -> anyhow::Result<
 }
 
 #[test]
-fn test_squash_merged_then_modified_detected_as_unmerged() -> anyhow::Result<()> {
-    // When a branch is squash-merged and then master continues to evolve,
-    // the branch will have differences compared to current master.
-    // This correctly shows as "Unmerged" because merging the branch would
-    // introduce changes (even though they were previously merged).
+fn test_squash_merged_then_modified_still_merged() -> anyhow::Result<()> {
+    // When a branch is squash-merged and then master modifies the same file,
+    // the branch is still considered merged because its commit was applied.
+    // The git cherry command detects that the patch was incorporated.
     let repo = TestRepo::new()?;
     let config = test_config();
 
     // Create feature branch modifying README
-    repo.checkout_new_branch("feature/conflict-test")?;
+    repo.checkout_new_branch("feature/evolved")?;
     std::fs::write(repo.path().join("README.md"), "# Feature Content\n")?;
     git::run_git(repo.path(), &config, &["add", "README.md"])?;
     git::run_git(repo.path(), &config, &["commit", "-m", "modify readme"])?;
 
     // Squash merge to master
     repo.checkout("master")?;
-    repo.squash_merge("feature/conflict-test")?;
+    repo.squash_merge("feature/evolved")?;
 
     // Now modify the same file on master again
     std::fs::write(repo.path().join("README.md"), "# Master Content\n")?;
@@ -713,17 +798,18 @@ fn test_squash_merged_then_modified_detected_as_unmerged() -> anyhow::Result<()>
         &["commit", "-m", "master modifies readme"],
     )?;
 
-    // List branches - feature/conflict-test shows as unmerged because
-    // git diff master...branch shows the file differs
+    // The branch's commit was applied (squash merged), so it's safe to delete
+    // even though master later modified the same file
     let branches = list_branches(&repo, &config)?;
-    let feature = find_branch(&branches, "feature/conflict-test")
-        .expect("conflict-test branch should be listed");
+    let feature =
+        find_branch(&branches, "feature/evolved").expect("evolved branch should be listed");
 
     assert!(
-        feature.merge_status.requires_caution(),
-        "Branch with diverged content should be unmerged, got {:?}",
+        feature.merge_status.is_safely_deletable(),
+        "Squash-merged branch should be safe to delete even if master modified the file after, got {:?}",
         feature.merge_status
     );
+    assert_eq!(feature.merge_status, MergeStatus::Merged);
     Ok(())
 }
 
