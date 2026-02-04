@@ -109,8 +109,10 @@ fn check_merge_status_via_cherry(
     logger: GitLogger,
 ) -> MergeStatus {
     // Step 1: Try git cherry (works for single-commit squash and cherry-picks)
+    // Note: All paths in this function return SquashMerged (not Merged) because
+    // git's internal check doesn't recognize squash merges, requiring -D to delete.
     match git::is_branch_merged_by_cherry(repo, config, main_branch, branch, logger) {
-        Ok(true) => return MergeStatus::Merged,
+        Ok(true) => return MergeStatus::SquashMerged,
         Ok(false) => {}
         Err(e) => {
             log_merge_check_error(config, branch, "git cherry", &e);
@@ -132,7 +134,7 @@ fn check_merge_status_via_cherry(
     // If branch added files, check if they exist in main
     if !added_files.is_empty() {
         return match git::files_exist_in_branch(repo, config, main_branch, &added_files, logger) {
-            Ok(true) => MergeStatus::Merged,
+            Ok(true) => MergeStatus::SquashMerged,
             Ok(false) => MergeStatus::Unmerged,
             Err(e) => {
                 log_merge_check_error(config, branch, "check files exist", &e);
@@ -144,7 +146,7 @@ fn check_merge_status_via_cherry(
     // Step 3: Branch didn't add files - only modified existing ones
     // Check if those modifications are in main by comparing content
     match git::branch_changes_in_target(repo, config, main_branch, branch, logger) {
-        Ok(true) => MergeStatus::Merged,
+        Ok(true) => MergeStatus::SquashMerged,
         Ok(false) => MergeStatus::Unmerged,
         Err(e) => {
             log_merge_check_error(config, branch, "check modifications", &e);
@@ -361,24 +363,36 @@ pub fn delete_single_branch(
         };
     }
 
-    // Merged branches: safe delete
+    // Safely deletable branches (Merged or SquashMerged)
     if branch.merge_status.is_safely_deletable() {
-        return match git::delete_branch(repo, config, &branch.name, logger) {
+        // SquashMerged requires force delete because git doesn't recognize squash merges
+        let (delete_result, success_outcome) = if branch.merge_status.needs_force_delete() {
+            (
+                git::delete_branch_force(repo, config, &branch.name, logger),
+                DeletionOutcome::ForceDeleted,
+            )
+        } else {
+            (
+                git::delete_branch(repo, config, &branch.name, logger),
+                DeletionOutcome::Deleted,
+            )
+        };
+
+        return match delete_result {
             Ok(()) => DeletionResult {
                 branch: branch.name.clone(),
-                outcome: DeletionOutcome::Deleted,
+                outcome: success_outcome,
             },
             Err(e) => DeletionResult {
                 branch: branch.name.clone(),
                 outcome: DeletionOutcome::Failed {
-                    // Use {:#} to show full error chain including git stderr
                     error: format!("{:#}", e),
                 },
             },
         };
     }
 
-    // Unmerged branches: require Force mode
+    // Unmerged/Unclear branches: require Force mode from user confirmation
     if mode == DeletionMode::Safe {
         return DeletionResult {
             branch: branch.name.clone(),
@@ -396,7 +410,6 @@ pub fn delete_single_branch(
         Err(e) => DeletionResult {
             branch: branch.name.clone(),
             outcome: DeletionOutcome::Failed {
-                // Use {:#} to show full error chain including git stderr
                 error: format!("{:#}", e),
             },
         },

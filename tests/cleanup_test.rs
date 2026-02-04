@@ -70,10 +70,10 @@ fn test_squash_merge_detected_as_merged() -> anyhow::Result<()> {
 
     assert!(
         feature.merge_status.is_safely_deletable(),
-        "Merged branch should be safely deletable, got {:?}",
+        "Squash-merged branch should be safely deletable, got {:?}",
         feature.merge_status
     );
-    assert_eq!(feature.merge_status, MergeStatus::Merged);
+    assert_eq!(feature.merge_status, MergeStatus::SquashMerged);
     Ok(())
 }
 
@@ -90,7 +90,7 @@ fn test_multi_commit_squash_merge_detected_as_merged() -> anyhow::Result<()> {
     repo.checkout("master")?;
     repo.squash_merge("feature/multi")?;
 
-    // Multi-commit squash merge should be detected as merged
+    // Multi-commit squash merge should be detected as squash-merged
     // (git cherry alone fails for this, but hybrid approach catches it)
     let branches = list_branches(&repo, &config)?;
     let feature = find_branch(&branches, "feature/multi").expect("multi branch should be listed");
@@ -100,7 +100,7 @@ fn test_multi_commit_squash_merge_detected_as_merged() -> anyhow::Result<()> {
         "Multi-commit squash merge should be safely deletable, got {:?}",
         feature.merge_status
     );
-    assert_eq!(feature.merge_status, MergeStatus::Merged);
+    assert_eq!(feature.merge_status, MergeStatus::SquashMerged);
     Ok(())
 }
 
@@ -158,7 +158,7 @@ fn test_multi_commit_modifications_only_squash_merged() -> anyhow::Result<()> {
         "Squash-merged branch with only modifications should be merged, got {:?}",
         feature.merge_status
     );
-    assert_eq!(feature.merge_status, MergeStatus::Merged);
+    assert_eq!(feature.merge_status, MergeStatus::SquashMerged);
     Ok(())
 }
 
@@ -210,6 +210,7 @@ fn test_cherry_picked_branch_detected_as_merged() -> anyhow::Result<()> {
         "Cherry-picked branch should be safely deletable, got {:?}",
         feature.merge_status
     );
+    // Note: cherry-picks are detected by git branch --merged, so they return Merged
     assert_eq!(feature.merge_status, MergeStatus::Merged);
     Ok(())
 }
@@ -333,7 +334,7 @@ fn test_binary_file_merged_then_modified_still_merged() -> anyhow::Result<()> {
         "Squash-merged branch should be safe to delete even if master modified the file after, got {:?}",
         feature.merge_status
     );
-    assert_eq!(feature.merge_status, MergeStatus::Merged);
+    assert_eq!(feature.merge_status, MergeStatus::SquashMerged);
     Ok(())
 }
 
@@ -767,7 +768,7 @@ fn test_squash_merged_branch_still_merged_when_master_ahead() -> anyhow::Result<
         "Squash-merged branch should be safe to delete even when master is ahead, got {:?}",
         feature.merge_status
     );
-    assert_eq!(feature.merge_status, MergeStatus::Merged);
+    assert_eq!(feature.merge_status, MergeStatus::SquashMerged);
     Ok(())
 }
 
@@ -809,7 +810,7 @@ fn test_squash_merged_then_modified_still_merged() -> anyhow::Result<()> {
         "Squash-merged branch should be safe to delete even if master modified the file after, got {:?}",
         feature.merge_status
     );
-    assert_eq!(feature.merge_status, MergeStatus::Merged);
+    assert_eq!(feature.merge_status, MergeStatus::SquashMerged);
     Ok(())
 }
 

@@ -234,6 +234,7 @@ fn branch_status_text(branch: &BranchInfo) -> &'static str {
 fn merge_status_text(status: &MergeStatus) -> &'static str {
     match status {
         MergeStatus::Merged => "merged",
+        MergeStatus::SquashMerged => "squash-merged",
         MergeStatus::Unmerged => "unmerged",
         MergeStatus::Unclear => "unclear",
     }
