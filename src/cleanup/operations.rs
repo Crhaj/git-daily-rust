@@ -27,6 +27,7 @@ use super::types::{
 /// Returns an error if:
 /// - Git commands fail to execute
 /// - Neither `master` nor `main` branch exists in the repository
+#[must_use = "query function returns data that should be used"]
 pub fn detect_main_branch(
     repo: &Path,
     config: &Config,
@@ -306,6 +307,7 @@ fn get_current_branch_name(repo: &Path, config: &Config, logger: GitLogger) -> O
 ///
 /// This is useful for warning users that they may accidentally delete
 /// the branch they were previously on.
+#[must_use]
 pub fn is_detached_head(repo: &Path, config: &Config, logger: GitLogger) -> bool {
     get_current_branch_name(repo, config, logger).is_none()
 }

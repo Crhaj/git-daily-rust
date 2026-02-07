@@ -161,6 +161,7 @@ fn build_verbose_logger_lines(args: &[&str], output: Option<&str>) -> Vec<String
     }
 }
 
+#[must_use = "query function returns data that should be used"]
 pub fn get_current_branch(
     repo: &Path,
     config: &Config,
@@ -170,6 +171,7 @@ pub fn get_current_branch(
         .context("Failed to get current branch")
 }
 
+#[must_use = "query function returns data that should be used"]
 pub fn get_current_commit(
     repo: &Path,
     config: &Config,
@@ -183,6 +185,7 @@ pub fn get_current_commit(
 ///
 /// `remote_ref` must be in `<remote>/<branch>` form (for example, `origin/feature-x`),
 /// not a full `refs/remotes/...` path.
+#[must_use = "query function returns data that should be used"]
 pub fn remote_ref_exists(
     repo: &Path,
     config: &Config,
@@ -200,6 +203,7 @@ pub fn remote_ref_exists(
     Ok(output.status.success())
 }
 
+#[must_use = "query function returns data that should be used"]
 pub fn has_uncommitted_changes(
     repo: &Path,
     config: &Config,
@@ -331,6 +335,7 @@ pub fn merge_base(
 ///
 /// Note: This works for single-commit squash merges but NOT for multi-commit
 /// squash merges (the combined patch differs from individual patches).
+#[must_use = "query function returns data that should be used"]
 pub fn is_branch_merged_by_cherry(
     repo: &Path,
     config: &Config,
@@ -357,6 +362,7 @@ pub fn is_branch_merged_by_cherry(
 ///
 /// Returns a list of file paths that the branch introduced (not just modified).
 /// This is used to check if a squash-merged branch's additions are in the target.
+#[must_use = "query function returns data that should be used"]
 pub fn get_files_added_by_branch(
     repo: &Path,
     config: &Config,
@@ -522,6 +528,7 @@ pub fn diff_numstat(
 /// files that would be deleted when going from `from_branch` to `to_branch`.
 ///
 /// This catches edge cases that numstat misses, such as empty files unique to the branch.
+#[must_use = "query function returns data that should be used"]
 pub fn has_deleted_files(
     repo: &Path,
     config: &Config,
