@@ -15,8 +15,18 @@ use crate::constants;
 thread_local! {
     /// Tracks whether we've printed the first git command timing in this thread.
     ///
+    /// # Why thread-local?
+    ///
     /// Using thread-local storage instead of a global static avoids test pollution
-    /// when tests run in parallel - each test thread gets its own flag.
+    /// when tests run in parallel - each test thread gets its own independent flag.
+    ///
+    /// # Why Cell is safe here
+    ///
+    /// `Cell<bool>` provides interior mutability without synchronization overhead.
+    /// This is safe because:
+    /// - `thread_local!` guarantees single-threaded access (no data races possible)
+    /// - `bool` is `Copy`, so `Cell::get()`/`Cell::set()` never panic
+    /// - No references to the inner value escape the closure passed to `.with()`
     static FIRST_GIT_PRINTED: Cell<bool> = const { Cell::new(false) };
 }
 
