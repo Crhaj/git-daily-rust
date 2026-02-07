@@ -3,11 +3,22 @@
 //! Thin wrappers around git CLI commands with error formatting and timeout support.
 //! Uses callback-based logging to avoid coupling with presentation layer.
 
-use crate::config::Config;
-use crate::constants;
 use anyhow::Context;
+use std::cell::Cell;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::time::Instant;
+
+use crate::config::Config;
+use crate::constants;
+
+thread_local! {
+    /// Tracks whether we've printed the first git command timing in this thread.
+    ///
+    /// Using thread-local storage instead of a global static avoids test pollution
+    /// when tests run in parallel - each test thread gets its own flag.
+    static FIRST_GIT_PRINTED: Cell<bool> = const { Cell::new(false) };
+}
 
 /// Callback for logging git commands and their output.
 /// Used to decouple git operations from presentation concerns.
@@ -540,6 +551,20 @@ fn run_git_output(
 ) -> anyhow::Result<std::process::Output> {
     logger(config, args, None);
 
+    let start = Instant::now();
+    let debug = config.is_debug();
+    // Print first command timing with --debug, all commands with GIT_DAILY_DEBUG=1
+    let trace_all = std::env::var("GIT_DAILY_DEBUG").is_ok();
+    let is_first = debug
+        && FIRST_GIT_PRINTED.with(|flag| {
+            if flag.get() {
+                false
+            } else {
+                flag.set(true);
+                true
+            }
+        });
+
     let mut child = Command::new("git")
         .current_dir(repo)
         .args(args)
@@ -549,6 +574,18 @@ fn run_git_output(
         .context("Failed to spawn git command")?;
 
     let result = wait_with_timeout(&mut child, constants::git_timeout());
+
+    // Print timing for first command (--debug) or all commands (GIT_DAILY_DEBUG=1)
+    if is_first || trace_all {
+        let elapsed = start.elapsed();
+        let repo_name = repo.file_name().and_then(|n| n.to_str()).unwrap_or("repo");
+        eprintln!(
+            "[debug] git {} in {} took {:?}",
+            args.join(" "),
+            repo_name,
+            elapsed
+        );
+    }
 
     match result {
         Ok(output) => Ok(output),
@@ -744,6 +781,7 @@ mod tests {
         colored::control::set_override(false);
         let config = Config {
             verbosity: crate::config::Verbosity::Normal,
+            debug: false,
         };
         verbose_logger(&config, &["status"], None);
         verbose_logger(&config, &["status"], Some("output"));

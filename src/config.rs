@@ -7,6 +7,11 @@ use crate::git::{self, GitLogger};
 pub struct Config {
     /// Controls the verbosity level of CLI output.
     pub verbosity: Verbosity,
+    /// Enable debug timing output for diagnosing startup performance.
+    ///
+    /// When enabled, prints timing information for each startup phase
+    /// and the first git command executed.
+    pub debug: bool,
 }
 
 impl Config {
@@ -18,6 +23,11 @@ impl Config {
     #[must_use]
     pub fn is_verbose(&self) -> bool {
         self.verbosity == Verbosity::Verbose
+    }
+
+    #[must_use]
+    pub fn is_debug(&self) -> bool {
+        self.debug
     }
 
     /// Returns the appropriate git logger based on verbosity settings.
@@ -53,12 +63,14 @@ mod tests {
     fn test_config_quiet_and_verbose_flags() {
         let quiet = Config {
             verbosity: Verbosity::Quiet,
+            debug: false,
         };
         assert!(quiet.is_quiet());
         assert!(!quiet.is_verbose());
 
         let verbose = Config {
             verbosity: Verbosity::Verbose,
+            debug: false,
         };
         assert!(!verbose.is_quiet());
         assert!(verbose.is_verbose());
@@ -68,6 +80,7 @@ mod tests {
     fn test_git_logger_selects_verbose_or_no_op() {
         let verbose = Config {
             verbosity: Verbosity::Verbose,
+            debug: false,
         };
         assert!(std::ptr::fn_addr_eq(
             verbose.git_logger() as GitLogger,
@@ -76,10 +89,26 @@ mod tests {
 
         let normal = Config {
             verbosity: Verbosity::Normal,
+            debug: false,
         };
         assert!(std::ptr::fn_addr_eq(
             normal.git_logger() as GitLogger,
             git::no_op_logger as GitLogger
         ));
+    }
+
+    #[test]
+    fn test_config_debug_flag() {
+        let with_debug = Config {
+            verbosity: Verbosity::Normal,
+            debug: true,
+        };
+        assert!(with_debug.is_debug());
+
+        let without_debug = Config {
+            verbosity: Verbosity::Normal,
+            debug: false,
+        };
+        assert!(!without_debug.is_debug());
     }
 }

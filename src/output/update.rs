@@ -2,7 +2,7 @@
 //!
 //! Provides spinners and progress bars for single-repo and workspace modes.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -11,7 +11,9 @@ use colored::Colorize;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 
 use crate::config::Config;
-use crate::constants::{DEFAULT_REPO_NAME, MAX_VISIBLE_COMPLETIONS, PROGRESS_TICK_MS};
+use crate::constants::{
+    DEFAULT_REPO_NAME, MAX_VISIBLE_ACTIVE, MAX_VISIBLE_COMPLETIONS, PROGRESS_TICK_MS,
+};
 use crate::repo::{UpdateCallbacks, UpdateOutcome, UpdateResult, UpdateStep};
 
 /// No-op callbacks for when progress tracking is not needed.
@@ -165,20 +167,28 @@ impl UpdateCallbacks for SingleRepoCallbacks {
 /// instead of multiple separate locks for related data.
 struct CompletionState {
     /// Recently completed repos for display (bounded by MAX_VISIBLE_COMPLETIONS).
-    repos: VecDeque<(String, bool)>,
+    completed_repos: VecDeque<(String, bool)>,
     /// Count of failed repos for status message.
     failed_count: usize,
     /// Total completed for determining ellipsis display.
     total_completed: usize,
+    /// Active repos with their current step (repo_name -> step).
+    active_repos: HashMap<String, UpdateStep>,
 }
 
 /// Thread-safe progress tracker for workspace mode.
 ///
 /// Shows a progress bar with the completion count and recent results.
+/// Designed for high concurrency (51+ parallel repos) with minimal lock contention.
 #[derive(Clone)]
 pub struct WorkspaceProgress {
-    _multi: Arc<MultiProgress>,
+    /// Owns the MultiProgress container that manages all progress bars.
+    /// Must be kept alive for child progress bars to render correctly.
+    /// Not accessed directly but required for indicatif's internal bookkeeping.
+    #[allow(dead_code)]
+    multi: Arc<MultiProgress>,
     main_bar: ProgressBar,
+    activity_slots: Vec<ProgressBar>,
     completion_slots: Vec<ProgressBar>,
     state: Arc<Mutex<CompletionState>>,
 }
@@ -193,6 +203,18 @@ impl WorkspaceProgress {
         }
     }
 
+    /// Updates the current step for a repository.
+    pub fn update_step(&self, repo_name: &str, step: &UpdateStep) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("WorkspaceProgress state mutex poisoned");
+
+        state.active_repos.insert(repo_name.to_string(), *step);
+        self.update_message(&state);
+        self.redraw_activity(&state);
+    }
+
     /// Marks a repository as completed.
     pub fn mark_completed(&self, repo_name: &str, success: bool) {
         self.main_bar.inc(1);
@@ -202,27 +224,84 @@ impl WorkspaceProgress {
             .lock()
             .expect("WorkspaceProgress state mutex poisoned");
 
+        state.active_repos.remove(repo_name);
+
         if !success {
             state.failed_count += 1;
-            self.main_bar
-                .set_message(format!("│ {} failed", state.failed_count).red().to_string());
         }
 
-        state.total_completed += 1;
-        state.repos.push_back((repo_name.to_string(), success));
+        self.update_message(&state);
+        self.redraw_activity(&state);
 
-        while state.repos.len() > MAX_VISIBLE_COMPLETIONS {
-            state.repos.pop_front();
+        state.total_completed += 1;
+        state
+            .completed_repos
+            .push_back((repo_name.to_string(), success));
+
+        while state.completed_repos.len() > MAX_VISIBLE_COMPLETIONS {
+            state.completed_repos.pop_front();
         }
 
         self.redraw_completions(&state);
     }
 
+    /// Updates the progress bar message with current status.
+    fn update_message(&self, state: &CompletionState) {
+        let active_count = state.active_repos.len();
+        let mut parts = Vec::new();
+
+        if active_count > 0 {
+            parts.push(format!("{} active", active_count).cyan().to_string());
+        }
+
+        if state.failed_count > 0 {
+            parts.push(format!("{} failed", state.failed_count).red().to_string());
+        }
+
+        if parts.is_empty() {
+            self.main_bar.set_message("");
+        } else {
+            self.main_bar.set_message(format!("│ {}", parts.join(", ")));
+        }
+    }
+
     /// Clears and finishes the progress display.
     pub fn finish(&self) {
         self.main_bar.finish_and_clear();
+        for slot in &self.activity_slots {
+            slot.finish_and_clear();
+        }
         for slot in &self.completion_slots {
             slot.finish_and_clear();
+        }
+    }
+
+    /// Redraws the activity slots showing repos currently being updated.
+    fn redraw_activity(&self, state: &CompletionState) {
+        // Prioritize repos in later phases (pulling > fetching > others).
+        // Use repo name as secondary sort key for stable ordering - prevents
+        // UI flickering when multiple repos are in the same phase.
+        let mut active: Vec<_> = state.active_repos.iter().collect();
+        active.sort_by(|(name_a, step_a), (name_b, step_b)| {
+            step_priority(step_a)
+                .cmp(&step_priority(step_b))
+                .then_with(|| name_a.cmp(name_b))
+        });
+
+        for (i, slot) in self.activity_slots.iter().enumerate() {
+            if i < active.len() {
+                let (name, step) = active[i];
+                let icon = step_icon(step);
+                let step_name = step_short_name(step);
+                slot.set_message(format!(
+                    "  {}  {} {}",
+                    truncate_name(name, 20),
+                    step_name.dimmed(),
+                    icon
+                ));
+            } else {
+                slot.set_message("");
+            }
         }
     }
 
@@ -234,8 +313,8 @@ impl WorkspaceProgress {
                 slot.set_message("...".dimmed().to_string());
             } else {
                 let idx = if show_ellipsis { i - 1 } else { i };
-                if idx < state.repos.len() {
-                    let (name, success) = &state.repos[idx];
+                if idx < state.completed_repos.len() {
+                    let (name, success) = &state.completed_repos[idx];
                     let symbol = if *success { "✓".green() } else { "✗".red() };
                     slot.set_message(format!("{} {}", symbol, name));
                 } else {
@@ -243,6 +322,62 @@ impl WorkspaceProgress {
                 }
             }
         }
+    }
+}
+
+/// Returns a priority value for sorting steps (lower = show first, later phases prioritized).
+fn step_priority(step: &UpdateStep) -> u8 {
+    match step {
+        UpdateStep::Pulling => 0,      // Show pulling first (almost done)
+        UpdateStep::PoppingStash => 1, // Finishing up
+        UpdateStep::RestoringBranch => 2,
+        UpdateStep::CheckingOut => 3,
+        UpdateStep::Stashing => 4,
+        UpdateStep::Fetching => 5, // Most common slow step
+        UpdateStep::CheckingChanges => 6,
+        UpdateStep::DetectingBranch => 7,
+        UpdateStep::Started => 8,
+        UpdateStep::Completed => 9,
+    }
+}
+
+/// Returns a short icon for each step.
+fn step_icon(step: &UpdateStep) -> &'static str {
+    match step {
+        UpdateStep::Fetching => "⟳",
+        UpdateStep::Pulling => "↓",
+        UpdateStep::Stashing | UpdateStep::PoppingStash => "📦",
+        UpdateStep::CheckingOut | UpdateStep::RestoringBranch => "⎇",
+        _ => "·",
+    }
+}
+
+/// Returns a short name for each step.
+fn step_short_name(step: &UpdateStep) -> &'static str {
+    match step {
+        UpdateStep::Started => "starting",
+        UpdateStep::DetectingBranch => "detecting",
+        UpdateStep::CheckingChanges => "checking",
+        UpdateStep::Fetching => "fetching",
+        UpdateStep::Stashing => "stashing",
+        UpdateStep::CheckingOut => "checkout",
+        UpdateStep::Pulling => "pulling",
+        UpdateStep::RestoringBranch => "restoring",
+        UpdateStep::PoppingStash => "unstashing",
+        UpdateStep::Completed => "done",
+    }
+}
+
+/// Truncates a name to fit in a fixed width, padding with spaces.
+///
+/// Handles Unicode correctly by counting characters, not bytes.
+fn truncate_name(name: &str, max_len: usize) -> String {
+    let char_count = name.chars().count();
+    if char_count <= max_len {
+        format!("{:<width$}", name, width = max_len)
+    } else {
+        let truncated: String = name.chars().take(max_len - 1).collect();
+        format!("{}…", truncated)
     }
 }
 
@@ -261,7 +396,9 @@ impl UpdateCallbacks for RepoProgressTracker {
         print_repo_header(&self.config, repo_name);
     }
 
-    fn on_step(&self, _step: &UpdateStep) {}
+    fn on_step(&self, step: &UpdateStep) {
+        self.workspace.update_step(&self.repo_name, step);
+    }
 
     fn on_step_execute(&self, step: &UpdateStep) {
         print_step(&self.config, step);
@@ -321,6 +458,20 @@ pub fn create_workspace_progress(total: usize, config: &Config) -> WorkspaceProg
         bar
     };
 
+    // Activity slots show currently active repos with their step
+    let activity_slots: Vec<ProgressBar> = if hide_progress {
+        vec![]
+    } else {
+        (0..MAX_VISIBLE_ACTIVE)
+            .map(|_| {
+                let slot = multi.add(ProgressBar::new_spinner());
+                slot.set_style(ProgressStyle::default_spinner().template("{msg}").unwrap());
+                slot
+            })
+            .collect()
+    };
+
+    // Completion slots show recently completed repos
     let completion_slots: Vec<ProgressBar> = if hide_progress {
         vec![]
     } else {
@@ -338,13 +489,15 @@ pub fn create_workspace_progress(total: usize, config: &Config) -> WorkspaceProg
     };
 
     WorkspaceProgress {
-        _multi: multi,
+        multi,
         main_bar,
+        activity_slots,
         completion_slots,
         state: Arc::new(Mutex::new(CompletionState {
-            repos: VecDeque::new(),
+            completed_repos: VecDeque::new(),
             failed_count: 0,
             total_completed: 0,
+            active_repos: HashMap::new(),
         })),
     }
 }
@@ -402,7 +555,10 @@ mod tests {
     use crate::config::Verbosity;
 
     fn make_config(verbosity: Verbosity) -> Config {
-        Config { verbosity }
+        Config {
+            verbosity,
+            debug: false,
+        }
     }
 
     #[test]
@@ -448,7 +604,7 @@ mod tests {
         }
 
         let state = workspace.state.lock().unwrap();
-        assert!(state.repos.len() <= MAX_VISIBLE_COMPLETIONS);
+        assert!(state.completed_repos.len() <= MAX_VISIBLE_COMPLETIONS);
         assert_eq!(state.total_completed, 8);
 
         drop(state);
@@ -526,5 +682,91 @@ mod tests {
             let msg = format_step_message(&step);
             assert!(!msg.is_empty());
         }
+    }
+
+    #[test]
+    fn test_step_priority_orders_later_phases_first() {
+        // Pulling should come before Fetching (lower priority = shown first)
+        assert!(step_priority(&UpdateStep::Pulling) < step_priority(&UpdateStep::Fetching));
+        assert!(step_priority(&UpdateStep::Fetching) < step_priority(&UpdateStep::DetectingBranch));
+        assert!(step_priority(&UpdateStep::PoppingStash) < step_priority(&UpdateStep::Stashing));
+    }
+
+    #[test]
+    fn test_step_icon_returns_icons_for_slow_steps() {
+        assert_eq!(step_icon(&UpdateStep::Fetching), "⟳");
+        assert_eq!(step_icon(&UpdateStep::Pulling), "↓");
+        assert_eq!(step_icon(&UpdateStep::Stashing), "📦");
+        assert_eq!(step_icon(&UpdateStep::PoppingStash), "📦");
+    }
+
+    #[test]
+    fn test_step_short_name_returns_short_names() {
+        assert_eq!(step_short_name(&UpdateStep::Fetching), "fetching");
+        assert_eq!(step_short_name(&UpdateStep::Pulling), "pulling");
+        assert_eq!(step_short_name(&UpdateStep::DetectingBranch), "detecting");
+    }
+
+    #[test]
+    fn test_truncate_name_pads_short_names() {
+        let result = truncate_name("foo", 10);
+        assert_eq!(result, "foo       ");
+        assert_eq!(result.len(), 10);
+    }
+
+    #[test]
+    fn test_truncate_name_truncates_long_names() {
+        let result = truncate_name("very-long-repo-name", 10);
+        assert_eq!(result, "very-long…");
+    }
+
+    #[test]
+    fn test_truncate_name_handles_exact_length() {
+        let result = truncate_name("exactly-10", 10);
+        assert_eq!(result, "exactly-10");
+    }
+
+    #[test]
+    fn test_truncate_name_handles_unicode() {
+        // Japanese characters (3 bytes each in UTF-8)
+        let result = truncate_name("日本語リポジトリ", 5);
+        assert!(result.ends_with('…'));
+        assert_eq!(result.chars().count(), 5); // 4 chars + ellipsis
+    }
+
+    #[test]
+    fn test_workspace_progress_update_step() {
+        let config = make_config(Verbosity::Normal);
+        let workspace = create_workspace_progress(5, &config);
+
+        workspace.update_step("repo-1", &UpdateStep::Fetching);
+        workspace.update_step("repo-2", &UpdateStep::Pulling);
+
+        let state = workspace.state.lock().unwrap();
+        assert_eq!(state.active_repos.len(), 2);
+        assert_eq!(
+            state.active_repos.get("repo-1"),
+            Some(&UpdateStep::Fetching)
+        );
+        assert_eq!(state.active_repos.get("repo-2"), Some(&UpdateStep::Pulling));
+
+        drop(state);
+        workspace.finish();
+    }
+
+    #[test]
+    fn test_workspace_progress_removes_completed_from_active() {
+        let config = make_config(Verbosity::Normal);
+        let workspace = create_workspace_progress(5, &config);
+
+        workspace.update_step("repo-1", &UpdateStep::Fetching);
+        workspace.mark_completed("repo-1", true);
+
+        let state = workspace.state.lock().unwrap();
+        assert!(state.active_repos.is_empty());
+        assert_eq!(state.completed_repos.len(), 1);
+
+        drop(state);
+        workspace.finish();
     }
 }

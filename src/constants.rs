@@ -32,6 +32,9 @@ pub const PROGRESS_TICK_MS: u64 = 80;
 /// Maximum number of completed repositories to show in the workspace progress display.
 pub const MAX_VISIBLE_COMPLETIONS: usize = 5;
 
+/// Maximum number of active repositories to show in the workspace progress display.
+pub const MAX_VISIBLE_ACTIVE: usize = 3;
+
 /// Default branch names to try when checking out the main branch.
 pub const MASTER_BRANCH: &str = "master";
 pub const MAIN_BRANCH: &str = "main";
