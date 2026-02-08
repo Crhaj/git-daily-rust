@@ -5,8 +5,8 @@
 //!
 //! # Module Structure
 //!
-//! - [`runner`] - Low-level execution infrastructure with timeout support
-//! - [`commands`] - High-level git command wrappers
+//! - `runner` - Low-level execution infrastructure with timeout support
+//! - `commands` - High-level git command wrappers
 
 mod commands;
 mod runner;

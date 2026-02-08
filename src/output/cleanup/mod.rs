@@ -2,8 +2,8 @@
 //!
 //! # Module Structure
 //!
-//! - [`formatting`] - Column width calculation and branch line formatting
-//! - [`printing`] - Terminal output for branch lists, results, and summaries
+//! - `formatting` - Column width calculation and branch line formatting
+//! - `printing` - Terminal output for branch lists, results, and summaries
 
 mod formatting;
 mod printing;

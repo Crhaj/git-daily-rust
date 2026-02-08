@@ -6,9 +6,9 @@
 //! # Architecture
 //!
 //! This module is organized into submodules:
-//! - [`types`]: Core data structures (`BranchInfo`, `MergeStatus`, `CleanupResult`, etc.)
-//! - [`operations`]: Git operations for branch analysis and deletion
-//! - [`interactive`]: Interactive orchestration via [`run_interactive`]
+//! - `types`: Core data structures (`BranchInfo`, `MergeStatus`, `CleanupResult`, etc.)
+//! - `operations`: Git operations for branch analysis and deletion
+//! - `interactive`: Interactive orchestration via [`run_interactive`]
 //!
 //! The interactive flow is decoupled from terminal I/O via the [`Prompter`] trait,
 //! enabling full testability with [`MockPrompter`].
