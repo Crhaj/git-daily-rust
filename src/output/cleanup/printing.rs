@@ -7,7 +7,7 @@ use colored::Colorize;
 use crate::cleanup::{BranchInfo, CleanupResult, DeletionOutcome, DeletionResult};
 use crate::config::Config;
 
-use super::formatting::{format_branch_line, BranchListWidths};
+use super::formatting::{BranchListWidths, format_branch_line};
 
 /// Width of the summary box divider line.
 const SUMMARY_BOX_WIDTH: usize = 60;

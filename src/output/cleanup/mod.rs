@@ -8,7 +8,7 @@
 mod formatting;
 mod printing;
 
-pub use formatting::{format_branch_line, format_branch_selection_item, BranchListWidths};
+pub use formatting::{BranchListWidths, format_branch_line, format_branch_selection_item};
 pub use printing::{
     print_analyzing_branches, print_branch_list, print_branch_list_header, print_cleanup_summary,
     print_deleting_header, print_deletion_result, print_no_branches_to_clean,

@@ -9,7 +9,7 @@ use anyhow::Context;
 use crate::config::Config;
 
 use super::runner::{run_git_output, run_git_with_logger};
-use super::{validate_branch_name, validate_remote_ref, GitLogger};
+use super::{GitLogger, validate_branch_name, validate_remote_ref};
 
 #[must_use = "query function returns data that should be used"]
 pub fn get_current_branch(
