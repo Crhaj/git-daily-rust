@@ -289,6 +289,24 @@ fn test_run_git_reports_failure_for_unknown_ref() -> anyhow::Result<()> {
 }
 
 #[test]
+fn test_run_git_handles_large_output_without_deadlock() -> anyhow::Result<()> {
+    let config = test_config();
+    let repo = TestRepo::new()?;
+
+    // A blob far larger than the OS pipe buffer (~64 KB). Before stdout/stderr
+    // were drained on separate threads, reading the pipe only after the process
+    // exited deadlocked here and surfaced as a spurious "timed out" error.
+    let big = "x".repeat(1_000_000);
+    std::fs::write(repo.path().join("big.txt"), &big)?;
+    git::run_git(repo.path(), &config, &["add", "big.txt"])?;
+    git::run_git(repo.path(), &config, &["commit", "-m", "Add big file"])?;
+
+    let output = git::run_git(repo.path(), &config, &["show", "HEAD:big.txt"])?;
+    assert_eq!(output.len(), big.len());
+    Ok(())
+}
+
+#[test]
 fn test_run_git_reports_spawn_failure_for_missing_repo_path() {
     let config = test_config();
     let missing_path = PathBuf::from("/no/such/repo/for/test");

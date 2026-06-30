@@ -21,6 +21,30 @@ pub fn git_timeout() -> Duration {
         .unwrap_or(Duration::from_secs(DEFAULT_GIT_TIMEOUT_SECS))
 }
 
+/// Environment variable controlling whether git may prompt on the terminal.
+pub const GIT_TERMINAL_PROMPT_VAR: &str = "GIT_TERMINAL_PROMPT";
+
+/// Value for [`GIT_TERMINAL_PROMPT_VAR`] that disables interactive prompts, so
+/// git fails fast on missing credentials instead of hanging on a prompt.
+pub const GIT_PROMPT_DISABLED: &str = "0";
+
+/// Environment variable git uses to override the SSH command.
+pub const GIT_SSH_COMMAND_VAR: &str = "GIT_SSH_COMMAND";
+
+/// Non-interactive SSH command: batch mode makes SSH fail fast rather than block
+/// on a passphrase or host-key prompt. Applied only when the user has not set
+/// their own `GIT_SSH_COMMAND`.
+pub const GIT_SSH_BATCH_COMMAND: &str = "ssh -oBatchMode=yes";
+
+/// How often (in milliseconds) to poll a spawned git process for exit while
+/// enforcing its timeout. Low so fast commands return promptly.
+pub const GIT_WAIT_POLL_MS: u64 = 10;
+
+/// Stack size (in bytes) for the short-lived threads that drain git's stdout and
+/// stderr. They run a tiny read loop, so the multi-megabyte default would waste
+/// address space when dozens of git commands run in parallel.
+pub const GIT_READER_STACK_SIZE: usize = 64 * 1024;
+
 /// Number of threads for parallel repository updates.
 /// Higher than CPU count because git operations are I/O-bound (network, disk).
 pub const RAYON_THREAD_COUNT: usize = 60;
