@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.6.5] - 2026-06-30
+
+### Fixed
+
+- Prevent hangs on credential prompts and large output
+
 ## [0.6.4] - 2026-02-08
 
 ### Changed
